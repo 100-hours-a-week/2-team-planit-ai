@@ -1,6 +1,6 @@
 def main():
     import uvicorn
-    from app.core.confing import settings
+    from app.core.config import settings
 
     uvicorn.run(
         app="app.main:app",
