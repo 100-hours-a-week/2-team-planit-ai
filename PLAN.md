@@ -21,7 +21,7 @@
   - CORS 설정
   - 환경변수 설정 (pydantic-settings)
 
-### 1.2 Health Check API 구현
+~~### 1.2 Health Check API 구현~~
 - **파일**: `app/api/` (새 파일 생성)
 - **설명**: 서버 상태 확인용 엔드포인트
 - **산출물**: `GET /health` 엔드포인트
