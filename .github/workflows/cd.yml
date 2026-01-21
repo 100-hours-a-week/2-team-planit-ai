@@ -1,0 +1,112 @@
+name: CD - AI
+
+on:
+  workflow_run:
+    workflows: ["CI - AI"]
+    types:
+      - completed
+    branches: [main]
+
+jobs:
+  ai-cd:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # CI에서 빌드한 wheel 다운로드
+      - name: Download Build Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ai-wheel
+          path: dist
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # wheel을 EC2로 전송
+      - name: Copy wheel to EC2
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          source: "dist/*.whl"
+          target: "/home/ubuntu/temp_ai"
+
+      # 서버 접속 후 기존 프로세스 종료 및 새 wheel 설치/실행
+      - name: Deploy to EC2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            # 폴더 이동 및 정리
+            sudo mkdir -p /var/www/planit/ai
+            sudo mkdir -p /var/www/planit/ai_backup
+
+            # 기존 wheel 있으면 백업 폴더로 이동(폴더 1개 = 배포 1개)
+            if ls /var/www/planit/ai/*.whl >/dev/null 2>&1; then
+              TS=$(date +%Y%m%d_%H%M%S)
+              sudo mkdir -p /var/www/planit/ai_backup/$TS
+              sudo mv /var/www/planit/ai/*.whl /var/www/planit/ai_backup/$TS/ || true
+            fi
+
+            # 새 wheel을 실행 폴더로 이동
+            sudo mv /home/ubuntu/temp_ai/*.whl /var/www/planit/ai/
+            sudo chown -R ubuntu:ubuntu /var/www/planit/ai /var/www/planit/ai_backup
+            rm -rf /home/ubuntu/temp_ai/*
+
+            # 백업은 최신 5개만 남기고 삭제
+            sudo ls -1dt /var/www/planit/ai_backup/* 2>/dev/null | tail -n +6 | xargs -r sudo rm -rf
+
+            # venv 준비(없으면 생성)
+            python3.11 -m venv ~/planit-venv || true
+            source ~/planit-venv/bin/activate
+            pip install --upgrade pip
+
+            # wheel 설치/업데이트
+            WHEEL_PATH=$(ls -1t /var/www/planit/ai/*.whl | head -n 1)
+            pip install --upgrade "$WHEEL_PATH"
+
+            # 기존 8000 포트 프로세스 종료
+            sudo fuser -k 8000/tcp || true
+
+            # 새 프로세스 실행
+            nohup uvicorn app.main:app \
+              --host localhost \
+              --port 8000 \
+              > /var/www/planit/ai/app.log 2>&1 &
+
+            echo "Health Check 시작"
+            for retry_count in {1..15}
+            do
+              response=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/health || true)
+              if [ "$response" -eq 200 ] || [ "$response" -eq 401 ]; then
+                echo "Server is up (HTTP $response)"
+                exit 0
+              fi
+              
+              echo "Waiting for server... (Attempt $retry_count/15)"
+              sleep 10
+            done
+            echo "Server failed to start."
+            tail -n 200 /var/www/planit/ai/app.log || true
+            exit 1
+
+      - name: Send Discord Notification
+        if: always()
+        run: |
+          STATUS="${{ job.status }}"
+          if [ "$STATUS" = "success" ]; then
+            MSG="CD - AI 성공"
+          else
+            MSG="CD - AI 실패"
+          fi
+          RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          curl -H "Content-Type: application/json" \
+               -X POST \
+               -d "{\"content\": \"${MSG}\n🔗 [배포 로그 확인](${RUN_URL})\"}" \
+               ${{ secrets.DISCORD_WEBHOOK_URL }}
