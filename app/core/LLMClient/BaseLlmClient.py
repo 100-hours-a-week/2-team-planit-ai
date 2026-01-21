@@ -23,9 +23,9 @@ class BaseLLMClient(ABC):
         self.top_p = top_p
 
     @abstractmethod
-    def call_llm_stream(self, prompt) -> AsyncIterator[str]:
+    def call_llm_stream(self, prompt: str) -> AsyncIterator[str]:
         pass
 
     @abstractmethod
-    def call_llm(self, prompt) -> str:
+    def call_llm(self, prompt: str) -> str:
         pass
