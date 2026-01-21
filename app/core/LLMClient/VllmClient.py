@@ -26,6 +26,7 @@ class VllmClient(BaseLLMClient):
 
     ) -> None:
         super().__init__(
+            base_url=base_url,
             timeout=timeout,
             max_retries=max_retries,
             max_tokens=max_tokens,
