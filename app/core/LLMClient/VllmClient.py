@@ -130,6 +130,7 @@ class VllmClient(BaseLLMClient):
         """
         비스트리밍 LLM API 호출 (sync)
         """
+        return ""
         import time
         request_data = {
             "messages": [{"role": "user", "content": prompt}],
