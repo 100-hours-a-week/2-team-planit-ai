@@ -215,8 +215,7 @@ class VllmClient(BaseLLMClient):
                     if "choices" in data and data["choices"]:
                         content = data["choices"][0]["message"]["content"]
                         try:
-                            # vLLM은 때때로 ```json ... ``` 블록을 포함할 수 있으므로 전처리 고려 필요하나,
-                            # guided_json을 사용하면 보통 순수 JSON만 반환함.
+                            content = self.stripJsonCodeFence(content)
                             return model.model_validate_json(content)
                         except Exception as e:
                             raise Exception(f"JSON 파싱 오류: {str(e)}\nContent: {content}")

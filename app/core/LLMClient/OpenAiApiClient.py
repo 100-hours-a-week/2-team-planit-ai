@@ -1,11 +1,12 @@
 import asyncio
 import json
 import httpx
-from typing import AsyncIterator, Optional, Type
-
+from typing import AsyncIterator, Optional, Type, TypeVar
 from app.core.LLMClient.BaseLlmClient import BaseLLMClient
 from app.core.config import settings
 from app.core.models.LlmClientDataclass.ChatMessageDataclass import ChatMessgage
+
+T = TypeVar('T')
 
 class OpenAiApiClient(BaseLLMClient):
     """
@@ -40,7 +41,7 @@ class OpenAiApiClient(BaseLLMClient):
         """
         request_data = {
             "model": self.model,
-            "messages": self.chatMessageToDict(prompt),
+            "messages": self.chatMessageToDictList(prompt),
             "max_completion_tokens": self.max_tokens,
             "top_p": self.top_p,
             "stream": True,
@@ -139,5 +140,71 @@ class OpenAiApiClient(BaseLLMClient):
                 continue
 
     async def call_llm_structured(self, prompt: ChatMessgage, model: Type[T]) -> T:
+        """
+        vLLM의 Guided Decoding 기능을 사용하여 구조화된 출력을 받아옴
+        """
+        request_data = {
+            "model": self.model,
+            "messages": self.chatMessageToDictList(prompt),
+            "max_completion_tokens": self.max_tokens,
+            "top_p": self.top_p,
+            "stream": False,
+            "response_format": {
+              "type": "json_schema",
+              "json_schema": {
+                  "name": model.__name__,
+                  "schema": _enforce_no_additional_props(model.model_json_schema()),
+                  "strict": True,
+              },
+          },
+        }
 
-        
+        if self.temperature is not None:
+            request_data["temperature"] = self.temperature
+
+        for attempt in range(self.max_retries):
+            try:
+                async with httpx.AsyncClient(
+                    timeout=self.timeout,
+                    headers={
+                        "Authorization": f"Bearer {settings.openai_api_key}",
+                        "Content-Type": "application/json",
+                    },
+                ) as client:
+                    response = await client.post(
+                        f"{self.base_url}/chat/completions",
+                        json=request_data,
+                    )
+
+                    if response.status_code == 503:
+                        await asyncio.sleep(2 ** attempt)
+                        continue
+
+                    if response.status_code != 200:
+                        raise Exception(f"LLM 서버 오류 (HTTP {response.status_code}): {response.text}")
+
+                    data = response.json()
+                    if "choices" in data and data["choices"]:
+                        content = data["choices"][0]["message"]["content"]
+                        try:
+                            content = self.stripJsonCodeFence(content)
+                            return model.model_validate_json(content)
+                        except Exception as e:
+                            raise Exception(f"JSON 파싱 오류: {str(e)}\nContent: {content}")
+                    
+                    raise Exception("LLM 응답에 choices가 없습니다.")
+
+            except (httpx.RequestError, httpx.TimeoutException) as e:
+                if attempt == self.max_retries - 1:
+                    raise Exception(f"LLM 서버 요청 실패: {str(e)}")
+                await asyncio.sleep(2 ** attempt)
+                continue
+    
+def _enforce_no_additional_props(schema: dict) -> dict:
+    if schema.get("type") == "object":
+        schema.setdefault("additionalProperties", False)
+        for prop in schema.get("properties", {}).values():
+            _enforce_no_additional_props(prop)
+    if "items" in schema:
+        _enforce_no_additional_props(schema["items"])
+    return schema

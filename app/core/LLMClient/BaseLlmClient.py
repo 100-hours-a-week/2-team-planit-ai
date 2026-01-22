@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod 
+import re
 from typing import AsyncIterator, Type, List, Dict, TypeVar
 from app.core.config import settings
 from app.core.models.LlmClientDataclass.ChatMessageDataclass import MessageData, ChatMessgage
@@ -45,3 +46,27 @@ class BaseLLMClient(ABC):
     
     def dictListToChatMessage(self, messages: List[Dict[str, str]]) -> ChatMessgage:
         return ChatMessgage(content=[self.dictToMessageData(message) for message in messages])
+
+    def stripJsonCodeFence(self, content: str) -> str:
+        """
+        JSON 코드 블록을 제거하는 함수
+        """
+        stripped = content.strip()
+        if "```" not in stripped:
+            return stripped
+
+        fenced_match = re.search(r"```(?:json)?\s*(.*?)\s*```", stripped, re.IGNORECASE | re.DOTALL)
+        if fenced_match:
+            return fenced_match.group(1).strip()
+
+        if stripped.startswith("```"):
+            first_newline = stripped.find("\n")
+            if first_newline == -1:
+                return ""
+            stripped = stripped[first_newline + 1:]
+            last_fence = stripped.rfind("```")
+            if last_fence != -1:
+                stripped = stripped[:last_fence]
+            return stripped.strip()
+
+        return stripped
