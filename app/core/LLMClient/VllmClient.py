@@ -1,10 +1,14 @@
 import asyncio
 import json
-from typing import AsyncIterator, Type, TypeVar
 import httpx
-from pydantic import BaseModel
-from app.core.LLMClient.BaseLlmClient import BaseLLMClient, T
+from typing import AsyncIterator, Type, List, Dict, TypeVar
+
 from app.core.config import settings
+from app.core.models.LlmClientDataclass.ChatMessageDataclass import ChatMessgage
+from app.core.LLMClient.BaseLlmClient import BaseLLMClient
+
+
+T = TypeVar('T')
 
 
 class VllmClient(BaseLLMClient):
@@ -35,7 +39,7 @@ class VllmClient(BaseLLMClient):
         )
         self.base_url = base_url.rstrip("/")
 
-    async def call_llm_stream(self, prompt: str) -> AsyncIterator[str]:
+    async def call_llm_stream(self, prompt: ChatMessgage) -> AsyncIterator[str]:
         """
         스트리밍 LLM API 호출 (async)
 
@@ -44,7 +48,7 @@ class VllmClient(BaseLLMClient):
         - '[DONE]' 이 오면 종료
         """
         request_data = {
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": self.chatMessageToDictList(prompt),
             "max_tokens": self.max_tokens,
             "top_p": self.top_p,
             "temperature": self.temperature,
@@ -126,36 +130,36 @@ class VllmClient(BaseLLMClient):
                 await asyncio.sleep(2 ** attempt)
                 continue
 
-    def call_llm(self, prompt: str) -> str:
+    async def call_llm(self, prompt: ChatMessgage) -> str:
         """
         비스트리밍 LLM API 호출 (sync)
         """
-        return ""
         import time
         request_data = {
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": self.chatMessageToDictList(prompt),
             "max_tokens": self.max_tokens,
             "top_p": self.top_p,
             "stream": False,
         }
+
         if self.temperature is not None:
             request_data["temperature"] = self.temperature
 
         for attempt in range(self.max_retries):
             try:
-                with httpx.Client(
+                async with httpx.AsyncClient(
                     timeout=self.timeout,
                     headers={
                         "Content-Type": "application/json",
                     },
                 ) as client:
-                    response = client.post(
+                    response = await client.post(
                         f"{self.base_url}/v1/chat/completions",
                         json=request_data,
                     )
 
                     if response.status_code == 503:
-                        time.sleep(2 ** attempt)
+                        await asyncio.sleep(2 ** attempt)
                         continue
 
                     if response.status_code != 200:
@@ -169,5 +173,58 @@ class VllmClient(BaseLLMClient):
             except (httpx.RequestError, httpx.TimeoutException) as e:
                 if attempt == self.max_retries - 1:
                     return f"LLM 서버 요청 실패: {str(e)}"
-                time.sleep(2 ** attempt)
+                await asyncio.sleep(2 ** attempt)
+                continue
+
+    async def call_llm_structured(self, prompt: ChatMessgage, model: Type[T]) -> T:
+        """
+        vLLM의 Guided Decoding 기능을 사용하여 구조화된 출력을 받아옴
+        """
+        request_data = {
+            "messages": self.chatMessageToDictList(prompt),
+            "max_tokens": self.max_tokens,
+            "top_p": self.top_p,
+            "stream": False,
+            "guided_json": model.model_json_schema()
+        }
+
+        if self.temperature is not None:
+            request_data["temperature"] = self.temperature
+
+        for attempt in range(self.max_retries):
+            try:
+                async with httpx.AsyncClient(
+                    timeout=self.timeout,
+                    headers={
+                        "Content-Type": "application/json",
+                    },
+                ) as client:
+                    response = await client.post(
+                        f"{self.base_url}/v1/chat/completions",
+                        json=request_data,
+                    )
+
+                    if response.status_code == 503:
+                        await asyncio.sleep(2 ** attempt)
+                        continue
+
+                    if response.status_code != 200:
+                        raise Exception(f"LLM 서버 오류 (HTTP {response.status_code}): {response.text}")
+
+                    data = response.json()
+                    if "choices" in data and data["choices"]:
+                        content = data["choices"][0]["message"]["content"]
+                        try:
+                            # vLLM은 때때로 ```json ... ``` 블록을 포함할 수 있으므로 전처리 고려 필요하나,
+                            # guided_json을 사용하면 보통 순수 JSON만 반환함.
+                            return model.model_validate_json(content)
+                        except Exception as e:
+                            raise Exception(f"JSON 파싱 오류: {str(e)}\nContent: {content}")
+                    
+                    raise Exception("LLM 응답에 choices가 없습니다.")
+
+            except (httpx.RequestError, httpx.TimeoutException) as e:
+                if attempt == self.max_retries - 1:
+                    raise Exception(f"LLM 서버 요청 실패: {str(e)}")
+                await asyncio.sleep(2 ** attempt)
                 continue

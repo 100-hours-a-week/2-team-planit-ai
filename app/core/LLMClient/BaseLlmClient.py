@@ -1,9 +1,9 @@
 from abc import ABC, abstractmethod 
-from typing import AsyncIterator, Type, TypeVar
-from pydantic import BaseModel
+from typing import AsyncIterator, Type, List, Dict, TypeVar
 from app.core.config import settings
+from app.core.models.LlmClientDataclass.ChatMessageDataclass import MessageData, ChatMessgage
 
-T = TypeVar("T", bound=BaseModel)
+T = TypeVar('T')
 
 class BaseLLMClient(ABC):
     def __init__(
@@ -23,9 +23,25 @@ class BaseLLMClient(ABC):
         self.top_p = top_p
 
     @abstractmethod
-    def call_llm_stream(self, prompt: str) -> AsyncIterator[str]:
+    async def call_llm_stream(self, prompt: ChatMessgage) -> AsyncIterator[str]:
         pass
 
     @abstractmethod
-    def call_llm(self, prompt: str) -> str:
+    async def call_llm(self, prompt: ChatMessgage) -> str:
         pass
+
+    @abstractmethod
+    async def call_llm_structured(self, prompt: ChatMessgage, model: Type[T]) -> T:
+        pass
+
+    def messageDataToDict(self, messageData: MessageData) -> Dict[str, str]:
+        return {"role": messageData.role, "content": messageData.content}
+    
+    def dictToMessageData(self, dict: Dict[str, str]) -> MessageData:
+        return MessageData(role=dict["role"], content=dict["content"])  
+
+    def chatMessageToDictList(self, chatMessage: ChatMessgage) -> List[Dict[str, str]]:
+        return [self.messageDataToDict(message) for message in chatMessage.content]
+    
+    def dictListToChatMessage(self, messages: List[Dict[str, str]]) -> ChatMessgage:
+        return ChatMessgage(content=[self.dictToMessageData(message) for message in messages])

@@ -1,10 +1,11 @@
 import asyncio
 import json
-from typing import AsyncIterator, Type, TypeVar, Optional
 import httpx
-from pydantic import BaseModel
-from app.core.LLMClient.BaseLlmClient import BaseLLMClient, T
+from typing import AsyncIterator, Optional, Type
+
+from app.core.LLMClient.BaseLlmClient import BaseLLMClient
 from app.core.config import settings
+from app.core.models.LlmClientDataclass.ChatMessageDataclass import ChatMessgage
 
 class OpenAiApiClient(BaseLLMClient):
     """
@@ -21,7 +22,7 @@ class OpenAiApiClient(BaseLLMClient):
         temperature: float = settings.llm_client_temperature,
         top_p: float = settings.llm_client_top_p,
         api_key: Optional[str] = settings.openai_api_key,
-    ) -> None:
+    ):
         super().__init__(
             base_url=base_url,
             timeout=timeout,
@@ -33,13 +34,13 @@ class OpenAiApiClient(BaseLLMClient):
         self.api_key = api_key
         self.model = model
 
-    async def call_llm_stream(self, prompt: str) -> AsyncIterator[str]:
+    async def call_llm_stream(self, prompt: ChatMessgage) -> AsyncIterator[str]:
         """
         스트리밍 OpenAI API 호출 (async)
         """
         request_data = {
             "model": self.model,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": self.chatMessageToDict(prompt),
             "max_completion_tokens": self.max_tokens,
             "top_p": self.top_p,
             "stream": True,
@@ -94,14 +95,14 @@ class OpenAiApiClient(BaseLLMClient):
                 await asyncio.sleep(2 ** attempt)
                 continue
 
-    def call_llm(self, prompt: str) -> str:
+    async def call_llm(self, prompt: ChatMessgage) -> str:
         """
         비스트리밍 OpenAI API 호출 (sync)
         """
         import time
         request_data = {
             "model": self.model,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": self.chatMessageToDictList(prompt),
             "max_completion_tokens": self.max_tokens,
             "top_p": self.top_p,
             "stream": False,
@@ -111,14 +112,14 @@ class OpenAiApiClient(BaseLLMClient):
 
         for attempt in range(self.max_retries):
             try:
-                with httpx.Client(
+                async with httpx.AsyncClient(
                     timeout=self.timeout,
                     headers={
                         "Authorization": f"Bearer {settings.openai_api_key}",
                         "Content-Type": "application/json",
                     },
                 ) as client:
-                    response = client.post(
+                    response = await client.post(
                         f"{self.base_url}/chat/completions",
                         json=request_data,
                     )
@@ -134,5 +135,9 @@ class OpenAiApiClient(BaseLLMClient):
             except (httpx.RequestError, httpx.TimeoutException) as e:
                 if attempt == self.max_retries - 1:
                     return f"OpenAI API 요청 실패: {str(e)}"
-                time.sleep(2 ** attempt)
+                await asyncio.sleep(2 ** attempt)
                 continue
+
+    async def call_llm_structured(self, prompt: ChatMessgage, model: Type[T]) -> T:
+
+        
