@@ -1,34 +1,29 @@
 import asyncio
 import json
 import httpx
-from typing import AsyncIterator, Type, List, Dict, TypeVar
-
+from typing import AsyncIterator, Optional, Type, TypeVar
+from app.core.LLMClient.BaseLlmClient import BaseLLMClient
 from app.core.config import settings
 from app.core.models.LlmClientDataclass.ChatMessageDataclass import ChatMessgage
-from app.core.LLMClient.BaseLlmClient import BaseLLMClient
-
 
 T = TypeVar('T')
 
-
-class VllmClient(BaseLLMClient):
+class OpenAiApiClient(BaseLLMClient):
     """
-    LLM API 클라이언트 (httpx 기반 async 스트리밍 지원)
-    LLM서버에서 비동기로 응답을 받아오는 함수
-
-    Args:
-        BaseLLMClient (_type_): _description_
+    OpenAI API 클라이언트 (httpx 기반 async 스트리밍 지원)
     """
+
     def __init__(
         self,
-        base_url: str = settings.vllm_base_url,
+        base_url: str = settings.openai_base_url,
+        model: Optional[str] = settings.openai_model,
         timeout: int = settings.llm_client_timeout,
         max_retries: int = settings.llm_client_max_retries,
         max_tokens: int = settings.llm_client_max_tokens,
         temperature: float = settings.llm_client_temperature,
         top_p: float = settings.llm_client_top_p,
-
-    ) -> None:
+        api_key: Optional[str] = settings.openai_api_key,
+    ):
         super().__init__(
             base_url=base_url,
             timeout=timeout,
@@ -37,111 +32,20 @@ class VllmClient(BaseLLMClient):
             temperature=temperature,
             top_p=top_p,
         )
-        self.base_url = base_url.rstrip("/")
+        self.api_key = api_key
+        self.model = model
 
     async def call_llm_stream(self, prompt: ChatMessgage) -> AsyncIterator[str]:
         """
-        스트리밍 LLM API 호출 (async)
-
-        - /v1/chat/completions 엔드포인트로 SSE 스타일 스트림 요청
-        - 'data: {json}\n\n' 형식의 라인을 읽어서 content만 yield
-        - '[DONE]' 이 오면 종료
+        스트리밍 OpenAI API 호출 (async)
         """
         request_data = {
+            "model": self.model,
             "messages": self.chatMessageToDictList(prompt),
-            "max_tokens": self.max_tokens,
+            "max_completion_tokens": self.max_tokens,
             "top_p": self.top_p,
-            "temperature": self.temperature,
             "stream": True,
         }
-
-        # 지수 백오프를 포함한 재시도 루프
-        for attempt in range(self.max_retries):
-            try:
-                async with httpx.AsyncClient(
-                    timeout=self.timeout,
-                    headers={
-                        "Content-Type": "application/json",
-                        "Accept": "text/event-stream, application/json",
-                    },
-                ) as client:
-                    # 스트리밍 모드로 POST
-                    async with client.stream(
-                        "POST",
-                        f"{self.base_url}/v1/chat/completions",
-                        json=request_data,
-                    ) as response:
-
-                        # 200 OK가 아니라면 재시도 / 에러 처리
-                        if response.status_code == 503:
-                            # 서버 busy → 백오프 후 재시도
-                            await asyncio.sleep(2 ** attempt)
-                            continue
-
-                        if response.status_code != 200:
-                            # 즉시 에러 메시지 방출 후 종료
-                            yield f"LLM 서버 오류 (HTTP {response.status_code})"
-                            return
-
-                        # 200 OK → 스트림 처리
-                        content_len = 0  # 원래 코드와 동일한 방식 유지
-                        async for line in response.aiter_lines():
-                            # 없거나 SSE 형식: "data: {...}"
-                            if not line or not line.startswith("data: "):
-                                continue
-
-                            data_str = line[6:]  # 'data: ' 제거
-
-                            # 스트리밍 종료 신호
-                            if data_str.strip() == "[DONE]":
-                                return
-
-                            # JSON 파싱
-                            try:
-                                data = json.loads(data_str)
-                            except json.JSONDecodeError:
-                                # 이상한 데이터가 오면 그냥 무시 (원한다면 로그 추가)
-                                continue
-
-                            # OpenAI 스타일: choices[0].delta.content
-                            if "choices" in data and data["choices"]:
-                                choice = data["choices"][0]
-                                if "delta" in choice and "content" in choice["delta"]:
-                                    # TODO: vLLM은 원래 "현재까지 생성된 전체 문자열"을 매번 반환하는 구조
-                                    raw_content = choice["delta"]["content"]
-
-                                    # 기존 코드에서 slice를 사용하던 패턴 유지
-                                    content = raw_content[content_len:]
-                                    content_len += len(content)
-
-                                    if content:
-                                        # 여기서 한 청크씩 밖으로 내보냄
-                                        yield content
-
-                        # 여기까지 오면 스트림이 자연스럽게 끝난 것
-                        return
-
-            except (httpx.RequestError, httpx.TimeoutException) as e:
-                # 네트워크/타임아웃 에러 → 재시도 또는 마지막에는 에러 방출
-                if attempt == self.max_retries - 1:
-                    yield f"LLM 서버 요청 실패: {str(e)}"
-                    return
-
-                await asyncio.sleep(2 ** attempt)
-                continue
-
-    async def call_llm(self, prompt: ChatMessgage) -> str:
-        """
-        비스트리밍 LLM API 호출 (sync)
-        """
-        import time
-        request_data = {
-            "messages": self.chatMessageToDictList(prompt),
-            "max_tokens": self.max_tokens,
-            "top_p": self.top_p,
-            "stream": False,
-        }
-
         if self.temperature is not None:
             request_data["temperature"] = self.temperature
 
@@ -150,20 +54,79 @@ class VllmClient(BaseLLMClient):
                 async with httpx.AsyncClient(
                     timeout=self.timeout,
                     headers={
+                        "Authorization": f"Bearer {settings.openai_api_key}",
+                        "Content-Type": "application/json",
+                    },
+                ) as client:
+                    async with client.stream(
+                        "POST",
+                        f"{self.base_url}/chat/completions",
+                        json=request_data,
+                    ) as response:
+                        if response.status_code != 200:
+                            error_detail = await response.aread()
+                            yield f"OpenAI API 오류 (HTTP {response.status_code}): {error_detail.decode()}"
+                            return
+
+                        async for line in response.aiter_lines():
+                            if not line or not line.startswith("data: "):
+                                continue
+
+                            data_str = line[6:]
+                            if data_str.strip() == "[DONE]":
+                                return
+
+                            try:
+                                data = json.loads(data_str)
+                            except json.JSONDecodeError:
+                                continue
+
+                            if "choices" in data and data["choices"]:
+                                choice = data["choices"][0]
+                                if "delta" in choice and "content" in choice["delta"]:
+                                    content = choice["delta"]["content"]
+                                    if content:
+                                        yield content
+                        return
+
+            except (httpx.RequestError, httpx.TimeoutException) as e:
+                if attempt == self.max_retries - 1:
+                    yield f"OpenAI API 요청 실패: {str(e)}"
+                    return
+                await asyncio.sleep(2 ** attempt)
+                continue
+
+    async def call_llm(self, prompt: ChatMessgage) -> str:
+        """
+        비스트리밍 OpenAI API 호출 (sync)
+        """
+        import time
+        request_data = {
+            "model": self.model,
+            "messages": self.chatMessageToDictList(prompt),
+            "max_completion_tokens": self.max_tokens,
+            "top_p": self.top_p,
+            "stream": False,
+        }
+        if self.temperature is not None:
+            request_data["temperature"] = self.temperature
+
+        for attempt in range(self.max_retries):
+            try:
+                async with httpx.AsyncClient(
+                    timeout=self.timeout,
+                    headers={
+                        "Authorization": f"Bearer {settings.openai_api_key}",
                         "Content-Type": "application/json",
                     },
                 ) as client:
                     response = await client.post(
-                        f"{self.base_url}/v1/chat/completions",
+                        f"{self.base_url}/chat/completions",
                         json=request_data,
                     )
-
-                    if response.status_code == 503:
-                        await asyncio.sleep(2 ** attempt)
-                        continue
-
+                    
                     if response.status_code != 200:
-                        return f"LLM 서버 오류 (HTTP {response.status_code})"
+                        return f"OpenAI API 오류 (HTTP {response.status_code}): {response.text}"
 
                     data = response.json()
                     if "choices" in data and data["choices"]:
@@ -172,7 +135,7 @@ class VllmClient(BaseLLMClient):
 
             except (httpx.RequestError, httpx.TimeoutException) as e:
                 if attempt == self.max_retries - 1:
-                    return f"LLM 서버 요청 실패: {str(e)}"
+                    return f"OpenAI API 요청 실패: {str(e)}"
                 await asyncio.sleep(2 ** attempt)
                 continue
 
@@ -181,11 +144,19 @@ class VllmClient(BaseLLMClient):
         vLLM의 Guided Decoding 기능을 사용하여 구조화된 출력을 받아옴
         """
         request_data = {
+            "model": self.model,
             "messages": self.chatMessageToDictList(prompt),
-            "max_tokens": self.max_tokens,
+            "max_completion_tokens": self.max_tokens,
             "top_p": self.top_p,
             "stream": False,
-            "guided_json": model.model_json_schema()
+            "response_format": {
+              "type": "json_schema",
+              "json_schema": {
+                  "name": model.__name__,
+                  "schema": _enforce_no_additional_props(model.model_json_schema()),
+                  "strict": True,
+              },
+          },
         }
 
         if self.temperature is not None:
@@ -196,11 +167,12 @@ class VllmClient(BaseLLMClient):
                 async with httpx.AsyncClient(
                     timeout=self.timeout,
                     headers={
+                        "Authorization": f"Bearer {settings.openai_api_key}",
                         "Content-Type": "application/json",
                     },
                 ) as client:
                     response = await client.post(
-                        f"{self.base_url}/v1/chat/completions",
+                        f"{self.base_url}/chat/completions",
                         json=request_data,
                     )
 
@@ -227,3 +199,12 @@ class VllmClient(BaseLLMClient):
                     raise Exception(f"LLM 서버 요청 실패: {str(e)}")
                 await asyncio.sleep(2 ** attempt)
                 continue
+    
+def _enforce_no_additional_props(schema: dict) -> dict:
+    if schema.get("type") == "object":
+        schema.setdefault("additionalProperties", False)
+        for prop in schema.get("properties", {}).values():
+            _enforce_no_additional_props(prop)
+    if "items" in schema:
+        _enforce_no_additional_props(schema["items"])
+    return schema
