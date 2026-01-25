@@ -1,0 +1,161 @@
+name: Rollback - AI
+
+on:
+  workflow_dispatch:  # 수동 실행
+
+jobs:
+  ai-rollback:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 마지막으로 성공한 CI ID 조회
+      - name: Find CI ID
+        id: find_run
+        run: |
+          RUN_ID=$(gh run list --workflow "CI - AI" --status success --limit 1 --json databaseId --jq '.[0].databaseId')
+          
+          if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
+            echo "성공한 CI ID를 찾을 수 없습니다."
+            exit 1
+          fi
+          
+          echo "target_id=$RUN_ID" >> $GITHUB_OUTPUT
+          
+          RUN_URL=$(gh run view $RUN_ID --json url --jq '.url')
+          echo "run_url=$RUN_URL" >> $GITHUB_OUTPUT
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # CI에서 빌드한 wheel 다운로드
+      - name: Download Build Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ai-wheel 
+          path: dist
+          run-id: ${{ steps.find_run.outputs.target_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # GitHub Actions IP를 AWS SG에 일시적으로 등록하기
+      - name: Get GitHub Actions IP
+        id: get-ip
+        uses: haythem/public-ip@v1.3
+
+      - name: Add IP to SG
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ap-northeast-2
+        run: |
+          aws ec2 authorize-security-group-ingress \
+            --group-id ${{ secrets.SECURITY_GROUP_ID }} \
+            --protocol tcp \
+            --port 22 \
+            --cidr ${{ steps.get-ip.outputs.ipv4 }}/32 \
+            || echo "IP may already be in security group"
+          sleep 10
+
+      # wheel을 EC2로 전송
+      - name: Copy wheel to EC2
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          source: "dist/*.whl"
+          target: "/home/ubuntu/temp_ai"
+          strip_components: 1
+
+      # 서버 접속 후 기존 프로세스 종료 및 새 wheel 설치/실행
+      - name: Deploy to EC2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            # 폴더 이동 및 정리
+            sudo mkdir -p /var/www/planit/ai
+            sudo mkdir -p /var/www/planit/ai_backup
+
+            # 기존 wheel 있으면 백업 폴더로 이동(폴더 1개 = 배포 1개)
+            if ls /var/www/planit/ai/*.whl >/dev/null 2>&1; then
+              TS=$(date +%Y%m%d_%H%M%S)
+              sudo mkdir -p /var/www/planit/ai_backup/$TS
+              sudo mv /var/www/planit/ai/*.whl /var/www/planit/ai_backup/$TS/ || true
+            fi
+
+            # 새 wheel을 실행 폴더로 이동
+            sudo mv /home/ubuntu/temp_ai/*.whl /var/www/planit/ai/
+            sudo chown -R ubuntu:ubuntu /var/www/planit/ai /var/www/planit/ai_backup
+            rm -rf /home/ubuntu/temp_ai/*
+
+            # 백업은 최신 5개만 남기고 삭제
+            sudo ls -1dt /var/www/planit/ai_backup/* 2>/dev/null | tail -n +6 | xargs -r sudo rm -rf
+
+            # venv 준비(없으면 생성)
+            python3.11 -m venv ~/planit-venv || true
+            source ~/planit-venv/bin/activate
+            pip install --upgrade pip
+
+            # wheel 설치/업데이트
+            WHEEL_PATH=$(ls -1t /var/www/planit/ai/*.whl | head -n 1)
+            pip install --upgrade "$WHEEL_PATH"
+
+            # 기존 8000 포트 프로세스 종료
+            sudo fuser -k 8000/tcp || true
+
+            # 새 프로세스 실행
+            nohup uvicorn app.main:app \
+              --host localhost \
+              --port 8000 \
+              > /var/www/planit/ai/app.log 2>&1 &
+
+            echo "Health Check 시작"
+            for retry_count in {1..15}
+            do
+              response=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/health || true)
+              if [ "$response" -eq 200 ] || [ "$response" -eq 401 ]; then
+                echo "Server is up (HTTP $response)"
+                exit 0
+              fi
+              
+              echo "Waiting for server... (Attempt $retry_count/15)"
+              sleep 10
+            done
+            echo "Server failed to start."
+            tail -n 200 /var/www/planit/ai/app.log || true
+            exit 1
+
+      # AWS SG에서 IP 제거
+      - name: Remove IP from Security Group
+        if: always()
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ap-northeast-2
+        run: |
+          aws ec2 revoke-security-group-ingress \
+            --group-id ${{ secrets.SECURITY_GROUP_ID }} \
+            --protocol tcp \
+            --port 22 \
+            --cidr ${{ steps.get-ip.outputs.ipv4 }}/32 \
+            || echo "Failed to remove IP or rule not found"
+
+      - name: Send Discord Notification
+        if: always()
+        run: |
+          STATUS="${{ job.status }}"
+          CI_RUN_URL="${{ steps.find_run.outputs.run_url }}"
+          if [ "$STATUS" = "success" ]; then
+            MSG="Rollback - AI 성공\n 롤백 소스 CI: [링크](${CI_RUN_URL})"
+          else
+            MSG="Rollback - AI 실패"
+          fi
+          RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          curl -H "Content-Type: application/json" \
+               -X POST \
+               -d "{\"content\": \"${MSG}\n🔗 [로그 확인](${RUN_URL})\"}" \
+               ${{ secrets.DISCORD_WEBHOOK_URL }}
