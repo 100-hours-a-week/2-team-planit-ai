@@ -132,16 +132,10 @@ jobs:
             || echo "Failed to remove IP or rule not found"
 
       - name: Send Discord Notification
-        if: always()
+        if: failure()
         run: |
-          STATUS="${{ job.status }}"
-          if [ "$STATUS" = "success" ]; then
-            MSG="CD - AI 성공"
-          else
-            MSG="CD - AI 실패"
-          fi
           RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           curl -H "Content-Type: application/json" \
                -X POST \
-               -d "{\"content\": \"${MSG}\n🔗 [배포 로그 확인](${RUN_URL})\"}" \
+               -d "{\"content\": \"CD - AI 실패\n🔗 [로그 확인하기](${RUN_URL})\"}" \
                ${{ secrets.DISCORD_WEBHOOK_URL }}

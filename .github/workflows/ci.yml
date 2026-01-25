@@ -43,17 +43,10 @@ jobs:
           retention-days: 7
           
       - name: Send Discord Notification
-        if: always()
+        if: failure()
         run: |
-          STATUS="${{ job.status }}"
-          if [ "$STATUS" = "success" ]; then
-            MSG="CI 성공!"
-          else
-            MSG="CI 실패!"
-          fi
-
           RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           curl -H "Content-Type: application/json" \
                -X POST \
-               -d "{\"content\": \"${MSG}\n[로그 확인하기](${RUN_URL})\"}" \
+               -d "{\"content\": \"CI - AI 실패\n🔗 [로그 확인하기](${RUN_URL})\"}" \
                ${{ secrets.DISCORD_WEBHOOK_URL }}
