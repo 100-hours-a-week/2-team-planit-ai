@@ -1,7 +1,7 @@
 import pytest
 from pydantic import BaseModel
 from app.core.LLMClient.OpenAiApiClient import OpenAiApiClient
-from app.core.models.LlmClientDataclass.ChatMessageDataclass import ChatMessgage, MessageData
+from app.core.models.LlmClientDataclass.ChatMessageDataclass import ChatMessage, MessageData
 
 # --- Test Models ---
 class SimpleResponse(BaseModel):
@@ -15,7 +15,7 @@ def client():
 
 @pytest.fixture
 def chat_message():
-    return ChatMessgage(
+    return ChatMessage(
         content=[
             MessageData(role="user", content="Hello, are you working?")
         ]
@@ -40,7 +40,7 @@ class TestVllmClientUnit:
         assert result.content == "Hi"
 
     def test_chat_message_to_dict_list(self, client):
-        chat_msg = ChatMessgage(
+        chat_msg = ChatMessage(
             content=[
                 MessageData(role="user", content="Hello"),
                 MessageData(role="assistant", content="Hi")
@@ -58,7 +58,7 @@ class TestVllmClientUnit:
             {"role": "assistant", "content": "Hi"}
         ]
         result = client.dictListToChatMessage(data_list)
-        assert isinstance(result, ChatMessgage)
+        assert isinstance(result, ChatMessage)
         assert len(result.content) == 2
         assert result.content[0].role == "user"
         assert result.content[0].content == "Hello"
@@ -115,7 +115,7 @@ class TestVllmClientIntegration:
         """call_llm_structured 실행 및 Pydantic 모델 반환 확인"""
         import asyncio
         async def run():
-            prompt = ChatMessgage(
+            prompt = ChatMessage(
                 content=[
                     MessageData(role="user", content="Generate a sample JSON with answer='Test Success' and confidence=99.")
                 ]

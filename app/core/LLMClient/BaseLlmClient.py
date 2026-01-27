@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 import re
 from typing import AsyncIterator, Type, List, Dict, TypeVar
 from app.core.config import settings
-from app.core.models.LlmClientDataclass.ChatMessageDataclass import MessageData, ChatMessgage
+from app.core.models.LlmClientDataclass.ChatMessageDataclass import MessageData, ChatMessage
 
 T = TypeVar('T')
 
@@ -24,15 +24,15 @@ class BaseLLMClient(ABC):
         self.top_p = top_p
 
     @abstractmethod
-    async def call_llm_stream(self, prompt: ChatMessgage) -> AsyncIterator[str]:
+    async def call_llm_stream(self, prompt: ChatMessage) -> AsyncIterator[str]:
         pass
 
     @abstractmethod
-    async def call_llm(self, prompt: ChatMessgage) -> str:
+    async def call_llm(self, prompt: ChatMessage) -> str:
         pass
 
     @abstractmethod
-    async def call_llm_structured(self, prompt: ChatMessgage, model: Type[T]) -> T:
+    async def call_llm_structured(self, prompt: ChatMessage, model: Type[T]) -> T:
         pass
 
     def messageDataToDict(self, messageData: MessageData) -> Dict[str, str]:
@@ -41,11 +41,11 @@ class BaseLLMClient(ABC):
     def dictToMessageData(self, dict: Dict[str, str]) -> MessageData:
         return MessageData(role=dict["role"], content=dict["content"])  
 
-    def chatMessageToDictList(self, chatMessage: ChatMessgage) -> List[Dict[str, str]]:
+    def chatMessageToDictList(self, chatMessage: ChatMessage) -> List[Dict[str, str]]:
         return [self.messageDataToDict(message) for message in chatMessage.content]
     
-    def dictListToChatMessage(self, messages: List[Dict[str, str]]) -> ChatMessgage:
-        return ChatMessgage(content=[self.dictToMessageData(message) for message in messages])
+    def dictListToChatMessage(self, messages: List[Dict[str, str]]) -> ChatMessage:
+        return ChatMessage(content=[self.dictToMessageData(message) for message in messages])
 
     def stripJsonCodeFence(self, content: str) -> str:
         """
