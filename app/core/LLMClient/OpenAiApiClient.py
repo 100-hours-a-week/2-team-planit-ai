@@ -4,7 +4,7 @@ import httpx
 from typing import AsyncIterator, Optional, Type, TypeVar
 from app.core.LLMClient.BaseLlmClient import BaseLLMClient
 from app.core.config import settings
-from app.core.models.LlmClientDataclass.ChatMessageDataclass import ChatMessgage
+from app.core.models.LlmClientDataclass.ChatMessageDataclass import ChatMessage
 
 T = TypeVar('T')
 
@@ -35,7 +35,7 @@ class OpenAiApiClient(BaseLLMClient):
         self.api_key = api_key
         self.model = model
 
-    async def call_llm_stream(self, prompt: ChatMessgage) -> AsyncIterator[str]:
+    async def call_llm_stream(self, prompt: ChatMessage) -> AsyncIterator[str]:
         """
         스트리밍 OpenAI API 호출 (async)
         """
@@ -96,7 +96,7 @@ class OpenAiApiClient(BaseLLMClient):
                 await asyncio.sleep(2 ** attempt)
                 continue
 
-    async def call_llm(self, prompt: ChatMessgage) -> str:
+    async def call_llm(self, prompt: ChatMessage) -> str:
         """
         비스트리밍 OpenAI API 호출 (sync)
         """
@@ -139,7 +139,7 @@ class OpenAiApiClient(BaseLLMClient):
                 await asyncio.sleep(2 ** attempt)
                 continue
 
-    async def call_llm_structured(self, prompt: ChatMessgage, model: Type[T]) -> T:
+    async def call_llm_structured(self, prompt: ChatMessage, model: Type[T]) -> T:
         """
         vLLM의 Guided Decoding 기능을 사용하여 구조화된 출력을 받아옴
         """

@@ -5,5 +5,6 @@ class MessageData(BaseModel):
     role: str
     content: str
 
-class ChatMessgage(BaseModel):
+class ChatMessage(BaseModel):
     content: List[MessageData]
+    
