@@ -24,7 +24,6 @@ jobs:
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      # ✅ dist 제거: tar를 워크스페이스 루트로 이동
       - name: Flatten artifact path
         run: |
           mv dist/planit-ai.tar.gz planit-ai.tar.gz
@@ -48,7 +47,6 @@ jobs:
             || echo "IP may already be in security group"
           sleep 10
 
-      # ✅ scp도 dist 제거: 파일 하나만 전송
       - name: Copy tar.gz to EC2
         uses: appleboy/scp-action@v0.1.7
         with:
@@ -61,7 +59,7 @@ jobs:
       - name: Deploy to EC2 (tar, build venv on EC2, keep log path, dotenv from secret)
         uses: appleboy/ssh-action@v1.0.3
         env:
-          AI_DOTENV_PROD: ${{ secrets.AI_DOTENV_PROD }} # .env 전체 내용(통째로)
+          AI_DOTENV_PROD: ${{ secrets.AI_DOTENV_PROD }}
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USERNAME }}
@@ -84,6 +82,9 @@ jobs:
             sudo mkdir -p "$BASE"
             sudo chown -R "${EC2_USER}:${EC2_USER}" "$BASE"
 
+            # scp target 디렉토리 없을 수도 있어서 보장
+            mkdir -p "/home/${EC2_USER}/temp_ai"
+
             echo "STEP: prepare tmp"
             mkdir -p "$TMP"
             rm -rf "$TMP"/*
@@ -99,10 +100,7 @@ jobs:
             echo "STEP: extract tar"
             tar -xzf "$TMP/planit-ai.tar.gz" -C "$TMP"
 
-            echo "STEP: list extracted"
-            ls -al "$TMP" || true
-            ls -al "$TMP/planit-ai" || true
-
+            echo "STEP: verify extracted"
             test -f "$TMP/planit-ai/main.py"
             test -f "$TMP/planit-ai/uv.lock"
 
@@ -114,22 +112,19 @@ jobs:
             printf "%s" "$AI_DOTENV_PROD" > "$APP_DIR/.env"
             chmod 600 "$APP_DIR/.env"
 
-            echo "STEP: remove venv if exists"
+            echo "STEP: remove project venv if exists"
             rm -rf "$APP_DIR/.venv" || true
 
-            echo "STEP: ensure uv installed"
-            export PATH="$HOME/.local/bin:$PATH"
+            echo "STEP: ensure bootstrap venv for uv (PEP668-safe)"
             python3 --version
-            python3 -m pip --version
+            BOOT_VENV="$BASE/.bootstrap-venv"
+            python3 -m venv "$BOOT_VENV" || true
+            "$BOOT_VENV/bin/python" -m pip install -U pip
+            "$BOOT_VENV/bin/pip" install -U uv
 
-            if ! command -v uv >/dev/null 2>&1; then
-              python3 -m pip install --user -U uv
-            fi
-            uv --version
-
-            echo "STEP: uv sync"
+            echo "STEP: uv sync (create project .venv)"
             cd "$APP_DIR"
-            uv sync --frozen
+            "$BOOT_VENV/bin/uv" sync --frozen
 
             echo "STEP: kill port"
             sudo fuser -k 8000/tcp || true
