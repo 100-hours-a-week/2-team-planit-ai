@@ -16,7 +16,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # CI에서 빌드한 tar.gz 다운로드
       - name: Download Build Artifact (tar.gz)
         uses: actions/download-artifact@v4
         with:
@@ -25,7 +24,6 @@ jobs:
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      # GitHub Actions IP를 AWS SG에 일시적으로 등록하기
       - name: Get GitHub Actions IP
         id: get-ip
         uses: haythem/public-ip@v1.3
@@ -44,7 +42,6 @@ jobs:
             || echo "IP may already be in security group"
           sleep 10
 
-      # tar.gz를 EC2로 전송
       - name: Copy tar.gz to EC2
         uses: appleboy/scp-action@v0.1.7
         with:
@@ -52,9 +49,8 @@ jobs:
           username: ${{ secrets.EC2_USERNAME }}
           key: ${{ secrets.EC2_SSH_KEY }}
           source: "dist/planit-ai.tar.gz"
-          target: "/home/ubuntu/temp_ai"
+          target: "/home/${{ secrets.EC2_USERNAME }}/temp_ai"
 
-      # 서버 접속 후 기존 프로세스 종료 및 새 tar 배포/실행 (EC2에서 .venv 생성)
       - name: Deploy to EC2 (tar, build venv on EC2, keep log path, dotenv from secret)
         uses: appleboy/ssh-action@v1.0.3
         env:
@@ -66,66 +62,73 @@ jobs:
           envs: AI_DOTENV_PROD
           script: |
             set -e
+            set -x
+            trap 'echo "FAILED at line $LINENO"; exit 1' ERR
+
+            EC2_USER="$(whoami)"
 
             BASE="/var/www/planit/ai"
             APP_DIR="$BASE/app"
             LOG="$BASE/app.log"
             TMP="/tmp/planit-ai-deploy"
+            TAR_IN="/home/${EC2_USER}/temp_ai/planit-ai.tar.gz"
 
-            # 디렉토리 준비 (로그 경로 유지)
+            echo "STEP: prepare dirs"
             sudo mkdir -p "$BASE"
-            sudo chown -R ubuntu:ubuntu "$BASE"
+            sudo chown -R "${EC2_USER}:${EC2_USER}" "$BASE"
 
-            # .env 통째로 생성(고정 위치)
-            ENV_FILE="$BASE/.env"
-            printf "%s" "$AI_DOTENV_PROD" > "$ENV_FILE"
-            chmod 600 "$ENV_FILE"
-
-            # 임시 배포 폴더 준비
+            echo "STEP: prepare tmp"
             mkdir -p "$TMP"
             rm -rf "$TMP"/*
 
-            # tar.gz 이동
-            test -f /home/ubuntu/temp_ai/planit-ai.tar.gz
-            mv /home/ubuntu/temp_ai/planit-ai.tar.gz "$TMP/"
-            rm -rf /home/ubuntu/temp_ai/* || true
+            echo "STEP: check tar"
+            ls -al "/home/${EC2_USER}/temp_ai" || true
+            test -f "$TAR_IN"
 
-            # 압축 해제 -> TMP/planit-ai 형태로 생성됨
+            echo "STEP: move tar"
+            mv "$TAR_IN" "$TMP/"
+            rm -rf "/home/${EC2_USER}/temp_ai/"* || true
+
+            echo "STEP: extract tar"
             tar -xzf "$TMP/planit-ai.tar.gz" -C "$TMP"
+
+            echo "STEP: list extracted"
+            ls -al "$TMP" || true
+            ls -al "$TMP/planit-ai" || true
+
             test -f "$TMP/planit-ai/main.py"
             test -f "$TMP/planit-ai/uv.lock"
 
-            # 백업 없이 교체
+            echo "STEP: replace app dir"
             rm -rf "$APP_DIR"
             mv "$TMP/planit-ai" "$APP_DIR"
 
-            # 앱 루트(uv.lock 옆)에 .env 두기
-            cp "$ENV_FILE" "$APP_DIR/.env"
+            echo "STEP: write .env (next to uv.lock)"
+            printf "%s" "$AI_DOTENV_PROD" > "$APP_DIR/.env"
             chmod 600 "$APP_DIR/.env"
 
-            # (중요) CI에서 가져온 .venv가 있으면 제거 (ARM에서 다시 생성)
+            echo "STEP: remove venv if exists"
             rm -rf "$APP_DIR/.venv" || true
 
-            # ---- EC2에서 uv 설치 + venv 생성 ----
+            echo "STEP: ensure uv installed"
             export PATH="$HOME/.local/bin:$PATH"
+            python3 --version
+            python3 -m pip --version
 
-            # uv 없으면 설치 (유저 영역)
             if ! command -v uv >/dev/null 2>&1; then
               python3 -m pip install --user -U uv
             fi
+            uv --version
 
-            # 프로젝트 루트에서 lock 기반 설치 + .venv 생성
-            pushd "$APP_DIR" >/dev/null
+            echo "STEP: uv sync"
+            cd "$APP_DIR"
             uv sync --frozen
-            popd >/dev/null
 
-            # 기존 8000 포트 프로세스 종료
+            echo "STEP: kill port"
             sudo fuser -k 8000/tcp || true
 
-            # 새 프로세스 실행 (CWD=APP_DIR로 고정해서 .env 확실히 읽힘)
-            pushd "$APP_DIR" >/dev/null
+            echo "STEP: start app"
             nohup ./.venv/bin/python ./main.py > "$LOG" 2>&1 &
-            popd >/dev/null
 
             echo "Health Check 시작"
             for retry_count in {1..15}; do
@@ -142,7 +145,6 @@ jobs:
             tail -n 200 "$LOG" || true
             exit 1
 
-      # AWS SG에서 IP 제거
       - name: Remove IP from Security Group
         if: always()
         env:
@@ -163,5 +165,5 @@ jobs:
           RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           curl -H "Content-Type: application/json" \
                -X POST \
-               -d "{\"content\": \"CD - AI 실패\n🔗 [로그 확인하기](${RUN_URL})\"}" \
+               -d "{\"content\": \"CD - AI 실패\n🔗 ${RUN_URL}\"}" \
                ${{ secrets.DISCORD_WEBHOOK_URL }}
