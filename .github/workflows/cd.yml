@@ -24,6 +24,12 @@ jobs:
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
+      # ✅ dist 제거: tar를 워크스페이스 루트로 이동
+      - name: Flatten artifact path
+        run: |
+          mv dist/planit-ai.tar.gz planit-ai.tar.gz
+          ls -al planit-ai.tar.gz
+
       - name: Get GitHub Actions IP
         id: get-ip
         uses: haythem/public-ip@v1.3
@@ -42,13 +48,14 @@ jobs:
             || echo "IP may already be in security group"
           sleep 10
 
+      # ✅ scp도 dist 제거: 파일 하나만 전송
       - name: Copy tar.gz to EC2
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USERNAME }}
           key: ${{ secrets.EC2_SSH_KEY }}
-          source: "dist/planit-ai.tar.gz"
+          source: "planit-ai.tar.gz"
           target: "/home/${{ secrets.EC2_USERNAME }}/temp_ai"
 
       - name: Deploy to EC2 (tar, build venv on EC2, keep log path, dotenv from secret)
@@ -86,7 +93,7 @@ jobs:
             test -f "$TAR_IN"
 
             echo "STEP: move tar"
-            mv "$TAR_IN" "$TMP/"
+            mv "$TAR_IN" "$TMP/planit-ai.tar.gz"
             rm -rf "/home/${EC2_USER}/temp_ai/"* || true
 
             echo "STEP: extract tar"
