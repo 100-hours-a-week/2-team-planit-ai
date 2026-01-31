@@ -16,11 +16,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # CI에서 빌드한 wheel 다운로드
-      - name: Download Build Artifact
+      # CI에서 빌드한 tar.gz 다운로드
+      - name: Download Build Artifact (tar.gz)
         uses: actions/download-artifact@v4
         with:
-          name: ai-wheel
+          name: planit-ai-tar
           path: dist
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -44,76 +44,102 @@ jobs:
             || echo "IP may already be in security group"
           sleep 10
 
-
-      # wheel을 EC2로 전송
-      - name: Copy wheel to EC2
+      # tar.gz를 EC2로 전송
+      - name: Copy tar.gz to EC2
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USERNAME }}
           key: ${{ secrets.EC2_SSH_KEY }}
-          source: "dist/*.whl"
+          source: "dist/planit-ai.tar.gz"
           target: "/home/ubuntu/temp_ai"
 
-      # 서버 접속 후 기존 프로세스 종료 및 새 wheel 설치/실행
-      - name: Deploy to EC2
+      # 서버 접속 후 기존 프로세스 종료 및 새 tar 배포/실행 (EC2에서 .venv 생성)
+      - name: Deploy to EC2 (tar, build venv on EC2, keep log path, dotenv from secret)
         uses: appleboy/ssh-action@v1.0.3
+        env:
+          AI_DOTENV_PROD: ${{ secrets.AI_DOTENV_PROD }} # .env 전체 내용(통째로)
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USERNAME }}
           key: ${{ secrets.EC2_SSH_KEY }}
+          envs: AI_DOTENV_PROD
           script: |
-            # 폴더 이동 및 정리
-            sudo mkdir -p /var/www/planit/ai
-            sudo mkdir -p /var/www/planit/ai_backup
+            set -e
 
-            # 기존 wheel 있으면 백업 폴더로 이동(폴더 1개 = 배포 1개)
-            if ls /var/www/planit/ai/*.whl >/dev/null 2>&1; then
-              TS=$(date +%Y%m%d_%H%M%S)
-              sudo mkdir -p /var/www/planit/ai_backup/$TS
-              sudo mv /var/www/planit/ai/*.whl /var/www/planit/ai_backup/$TS/ || true
+            BASE="/var/www/planit/ai"
+            APP_DIR="$BASE/app"
+            LOG="$BASE/app.log"
+            TMP="/tmp/planit-ai-deploy"
+
+            # 디렉토리 준비 (로그 경로 유지)
+            sudo mkdir -p "$BASE"
+            sudo chown -R ubuntu:ubuntu "$BASE"
+
+            # .env 통째로 생성(고정 위치)
+            ENV_FILE="$BASE/.env"
+            printf "%s" "$AI_DOTENV_PROD" > "$ENV_FILE"
+            chmod 600 "$ENV_FILE"
+
+            # 임시 배포 폴더 준비
+            mkdir -p "$TMP"
+            rm -rf "$TMP"/*
+
+            # tar.gz 이동
+            test -f /home/ubuntu/temp_ai/planit-ai.tar.gz
+            mv /home/ubuntu/temp_ai/planit-ai.tar.gz "$TMP/"
+            rm -rf /home/ubuntu/temp_ai/* || true
+
+            # 압축 해제 -> TMP/planit-ai 형태로 생성됨
+            tar -xzf "$TMP/planit-ai.tar.gz" -C "$TMP"
+            test -f "$TMP/planit-ai/main.py"
+            test -f "$TMP/planit-ai/uv.lock"
+
+            # 백업 없이 교체
+            rm -rf "$APP_DIR"
+            mv "$TMP/planit-ai" "$APP_DIR"
+
+            # 앱 루트(uv.lock 옆)에 .env 두기
+            cp "$ENV_FILE" "$APP_DIR/.env"
+            chmod 600 "$APP_DIR/.env"
+
+            # (중요) CI에서 가져온 .venv가 있으면 제거 (ARM에서 다시 생성)
+            rm -rf "$APP_DIR/.venv" || true
+
+            # ---- EC2에서 uv 설치 + venv 생성 ----
+            export PATH="$HOME/.local/bin:$PATH"
+
+            # uv 없으면 설치 (유저 영역)
+            if ! command -v uv >/dev/null 2>&1; then
+              python3 -m pip install --user -U uv
             fi
 
-            # 새 wheel을 실행 폴더로 이동
-            sudo mv /home/ubuntu/temp_ai/*.whl /var/www/planit/ai/
-            sudo chown -R ubuntu:ubuntu /var/www/planit/ai /var/www/planit/ai_backup
-            rm -rf /home/ubuntu/temp_ai/*
-
-            # 백업은 최신 5개만 남기고 삭제
-            sudo ls -1dt /var/www/planit/ai_backup/* 2>/dev/null | tail -n +6 | xargs -r sudo rm -rf
-
-            # venv 준비(없으면 생성)
-            python3.11 -m venv ~/planit-venv || true
-            source ~/planit-venv/bin/activate
-            pip install --upgrade pip
-
-            # wheel 설치/업데이트
-            WHEEL_PATH=$(ls -1t /var/www/planit/ai/*.whl | head -n 1)
-            pip install --upgrade "$WHEEL_PATH"
+            # 프로젝트 루트에서 lock 기반 설치 + .venv 생성
+            pushd "$APP_DIR" >/dev/null
+            uv sync --frozen
+            popd >/dev/null
 
             # 기존 8000 포트 프로세스 종료
             sudo fuser -k 8000/tcp || true
 
-            # 새 프로세스 실행
-            nohup uvicorn app.main:app \
-              --host localhost \
-              --port 8000 \
-              > /var/www/planit/ai/app.log 2>&1 &
+            # 새 프로세스 실행 (CWD=APP_DIR로 고정해서 .env 확실히 읽힘)
+            pushd "$APP_DIR" >/dev/null
+            nohup ./.venv/bin/python ./main.py > "$LOG" 2>&1 &
+            popd >/dev/null
 
             echo "Health Check 시작"
-            for retry_count in {1..15}
-            do
+            for retry_count in {1..15}; do
               response=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/health || true)
               if [ "$response" -eq 200 ] || [ "$response" -eq 401 ]; then
                 echo "Server is up (HTTP $response)"
                 exit 0
               fi
-              
               echo "Waiting for server... (Attempt $retry_count/15)"
               sleep 10
             done
+
             echo "Server failed to start."
-            tail -n 200 /var/www/planit/ai/app.log || true
+            tail -n 200 "$LOG" || true
             exit 1
 
       # AWS SG에서 IP 제거
