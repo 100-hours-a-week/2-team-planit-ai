@@ -164,4 +164,4 @@ jobs:
           curl -H "Content-Type: application/json" \
                -X POST \
                -d "{\"content\": \"CD - AI 실패\n🔗 [로그 확인하기](${RUN_URL})\"}" \
-               "${{ secrets.DISCORD_WEBHOOK_URL }}"
+               ${{ secrets.DISCORD_WEBHOOK_URL }}
