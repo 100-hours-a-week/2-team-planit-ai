@@ -11,7 +11,7 @@ class ItineraryRequest(BaseModel):
     totalBudget: int = Field(..., description="총 예산")
     travelTheme: List[str] = Field(..., description="여행 테마 리스트")
     # companion: List[str] = Field(..., description="동반인 리스트")
-    pace: str = Field(..., description="여행 일정 밀도 (여유롭게/보통/빡빡하게 등)")
+    # pace: str = Field(..., description="여행 일정 밀도 (여유롭게/보통/빡빡하게 등)")
     wantedPlace: List[str] = Field(..., description="가고 싶은 장소 리스트")
 
 
