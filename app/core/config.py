@@ -28,15 +28,20 @@ class Settings(BaseSettings):
     vllm_base_url: Optional[str]
     vllm_model: Optional[str]
 
+    # Google Maps Settings
+    google_maps_api_key: Optional[str]
+
     tavily_api_key: Optional[str]
+    langextract_api_key: Optional[str]
 
     @model_validator(mode='after')
     def validate_llm_settings(self) -> 'Settings':
         # 1. gpt-5 이상이거나 o1 모델인 경우 temperature를 사용하지 않음 (None 설정)
-        model_name = self.openai_model.lower()
-        if "gpt-5" in model_name or "o1-" in model_name:
-            self.llm_client_temperature = None
-        
+        if self.openai_model:
+            model_name = self.openai_model.lower()
+            if "gpt-5" in model_name or "o1-" in model_name:
+                self.llm_client_temperature = None
+
         return self
 
 
