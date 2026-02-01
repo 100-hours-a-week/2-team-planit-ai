@@ -6,7 +6,7 @@ from app.schemas.persona import ItineraryRequest
 # from app.service.Ininerary.gen_init_Ininerary import GenInitItineraryService
 # from app.api.deps import get_gen_itinerary_service
 
-# router = APIRouter(prefix="/itinerary", tags=["Itinerary"])
+router = APIRouter(prefix="/itinerary", tags=["Itinerary"])
 
 
 # @router.post("/gen", response_model=ItineraryResponse)
