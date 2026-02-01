@@ -17,7 +17,7 @@ async def gen_itinerary_endpoint(
     return await service.gen_init_itinerary(request)
 
 
-@router.post("/")
+@router.post("")
 def gen_itinerary_dummy(request: ItineraryRequest):
     """더미 응답을 반환하는 테스트 엔드포인트"""
     time.sleep(10)
