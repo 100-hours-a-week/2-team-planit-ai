@@ -84,11 +84,25 @@ print(category.value)  # "restaurant"
 | `name` | `str` | ✅ | - | POI 이름 |
 | `category` | `PoiCategory` | ❌ | `PoiCategory.OTHER` | POI 카테고리 |
 | `description` | `str` | ❌ | `""` | POI 설명 |
+| `city` | `Optional[str]` | ❌ | `None` | 도시명 |
 | `address` | `Optional[str]` | ❌ | `None` | 주소 |
 | `source` | `PoiSource` | ✅ | - | 데이터 출처 |
 | `source_url` | `Optional[str]` | ❌ | `None` | 출처 URL |
 | `raw_text` | `str` | ✅ | - | 임베딩 생성용 원본 텍스트 |
 | `created_at` | `datetime` | ❌ | `datetime.now()` | 생성 시간 |
+| `google_place_id` | `Optional[str]` | ❌ | `None` | Google Place ID |
+| `latitude` | `Optional[float]` | ❌ | `None` | 위도 |
+| `longitude` | `Optional[float]` | ❌ | `None` | 경도 |
+| `google_maps_uri` | `Optional[str]` | ❌ | `None` | Google Maps 링크 |
+| `types` | `Optional[List[str]]` | ❌ | `None` | Google 장소 유형 목록 |
+| `primary_type` | `Optional[str]` | ❌ | `None` | 주요 장소 유형 |
+| `google_rating` | `Optional[float]` | ❌ | `None` | Google 평점 |
+| `user_rating_count` | `Optional[int]` | ❌ | `None` | 리뷰 수 |
+| `price_level` | `Optional[str]` | ❌ | `None` | 가격대 |
+| `price_range` | `Optional[str]` | ❌ | `None` | 가격 범위 |
+| `website_uri` | `Optional[str]` | ❌ | `None` | 웹사이트 |
+| `phone_number` | `Optional[str]` | ❌ | `None` | 전화번호 |
+| `opening_hours` | `Optional[OpeningHours]` | ❌ | `None` | 영업시간 |
 
 ##### 💡 사용 예시
 
@@ -131,6 +145,31 @@ result = PoiSearchResult(
     relevance_score=0.85
 )
 ```
+
+---
+
+#### 🏗️ 영업시간 모델
+
+**`DayOfWeek(int, Enum)`**: 요일 (1=월 ~ 7=일, ISO 8601)
+
+**`TimeSlot(BaseModel)`**: 하나의 영업 시간대
+- `open_time` (`time`): 오픈 시간
+- `close_time` (`time`): 마감 시간
+
+**`DailyOpeningHours(BaseModel)`**: 하루 영업시간
+- `day` (`DayOfWeek`): 요일
+- `slots` (`List[TimeSlot]`): 영업 시간대 리스트
+- `is_closed` (`bool`): 휴무 여부
+
+**`OpeningHours(BaseModel)`**: 주간 영업시간
+- `periods` (`List[DailyOpeningHours]`): 요일별 영업시간 (월~일)
+- `raw_text` (`Optional[List[str]]`): Google API 원본 텍스트
+
+---
+
+#### 🚨 예외: `PoiValidationError`
+
+**설명**: POI를 외부 API로 검증할 수 없을 때 발생하는 예외입니다. `GoogleMapsPoiMapper`에서 장소를 찾을 수 없거나 API 오류 시 발생합니다.
 
 ---
 
@@ -180,21 +219,91 @@ poi_info = PoiInfo(
 | `reranked_web_results` | `List[PoiSearchResult]` | 리랭킹된 웹 검색 결과 |
 | `reranked_embedding_results` | `List[PoiSearchResult]` | 리랭킹된 임베딩 검색 결과 |
 | `merged_results` | `List[PoiSearchResult]` | 병합된 검색 결과 |
-| `final_pois` | `List[PoiInfo]` | 최종 추천 POI 목록 (출력) |
+| `poi_data_map` | `Annotated[Dict[str, PoiData], _merge_poi_data_map]` | poi_id → PoiData 매핑 (병렬 노드 병합 지원) |
+| `final_poi_data` | `List[PoiData]` | 최종 반환용 PoiData 리스트 |
+| `final_pois` | `List[PoiInfo]` | 최종 추천 POI 목록 (레거시) |
+
+> **`poi_data_map`**: `Annotated` 리듀서를 사용하여 `_process_web_results`와 `_embedding_search` 병렬 노드에서 동시에 업데이트해도 자동 병합됩니다.
 
 ##### 💡 사용 예시
 
 ```python
 initial_state: PoiAgentState = {
     "persona_summary": "20대 혼밥러, 을지로 맛집 탐방",
+    "travel_destination": "서울",
     "keywords": [],
     "web_results": [],
     "embedding_results": [],
     "reranked_web_results": [],
     "reranked_embedding_results": [],
     "merged_results": [],
-    "final_pois": []
+    "poi_data_map": {},
+    "final_poi_data": [],
+    "final_pois": [],
+    "final_poi_count": 15
 }
+```
+
+---
+
+#### 🔧 함수: `_merge_poi_data_map`
+
+**설명**: `poi_data_map` 필드의 병렬 노드 병합용 리듀서 함수입니다. LangGraph의 `Annotated` 타입과 함께 사용됩니다.
+
+```python
+def _merge_poi_data_map(existing: Dict[str, PoiData], new: Dict[str, PoiData]) -> Dict[str, PoiData]:
+```
+
+---
+
+## 📊 데이터 흐름 다이어그램
+
+```mermaid
+graph TD
+    subgraph Enums
+        PC["PoiCategory<br/>(restaurant, cafe, ...)"]
+        PS["PoiSource<br/>(web_search, embedding_db, ...)"]
+    end
+
+    subgraph 영업시간 모델
+        DOW["DayOfWeek"]
+        TS["TimeSlot"]
+        DOH["DailyOpeningHours"]
+        OH["OpeningHours"]
+        DOW --> DOH
+        TS --> DOH
+        DOH --> OH
+    end
+
+    subgraph 핵심 모델
+        PSR["PoiSearchResult<br/>(검색 결과)"]
+        PD["PoiData<br/>(원본 데이터)"]
+        PI["PoiInfo<br/>(최종 추천)"]
+    end
+
+    PC --> PD
+    PC --> PI
+    PS --> PD
+    PS --> PSR
+    OH --> PD
+
+    subgraph 파이프라인 흐름
+        WEB["WebSearch"] -->|수집| PSR
+        VEC["VectorSearch"] -->|수집| PSR
+        PSR -->|"Reranker + Merger"| PD
+        PD -->|"InfoSummarizeAgent (LLM)"| PI
+        PD -->|"VectorDB 저장"| STORE["ChromaDB"]
+    end
+
+    subgraph LangGraph 상태
+        PAS["PoiAgentState"]
+    end
+
+    PSR -->|"web_results / embedding_results"| PAS
+    PD -->|"poi_data_map / final_poi_data"| PAS
+    PI -->|"final_pois"| PAS
+
+    PVE["PoiValidationError"] -.->|"GoogleMapsPoiMapper<br/>검증 실패 시"| PD
 ```
 
 ---
@@ -202,6 +311,6 @@ initial_state: PoiAgentState = {
 ## 🔗 의존성
 
 - `pydantic.BaseModel`, `pydantic.Field`: 데이터 검증 및 메타데이터
-- `typing.List`, `typing.Optional`, `typing.TypedDict`: 타입 힌트
+- `typing.Annotated`, `typing.Dict`, `typing.List`, `typing.Optional`, `typing.TypedDict`: 타입 힌트
 - `datetime.datetime`: 타임스탬프
 - `enum.Enum`: 열거형 정의

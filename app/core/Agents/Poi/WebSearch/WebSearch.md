@@ -8,13 +8,11 @@
 
 ## 📄 파일 목록
 
-### `BaseVebSearchAgent.py`
+### `BaseWebSearchAgent.py`
 
 #### 📝 파일 설명
 
 웹 검색 에이전트의 **추상 기본 클래스(Abstract Base Class)**를 정의합니다. 모든 웹 검색 에이전트는 이 클래스를 상속받아 구현해야 합니다.
-
-> ⚠️ **참고**: 파일명에 오타가 있습니다 (`Veb` → `Web`).
 
 ---
 
@@ -169,14 +167,95 @@
 
 ---
 
+---
+
+## 📂 하위 폴더
+
+### `Extractor/`
+
+웹 검색 결과의 `raw_content`에서 개별 POI 정보를 추출하는 모듈입니다.
+
+#### `BaseExtractor.py`
+
+POI 추출 에이전트의 **추상 기본 클래스**입니다.
+
+**`extract(raw_content: str, url: str = None) -> List[PoiSearchResult]`** *(추상)*
+
+- **설명**: 마크다운 raw_content에서 POI 정보를 추출하여 PoiSearchResult 리스트로 반환합니다.
+
+#### `LangExtractor.py`
+
+`BaseExtractor`를 구현한 **langextract 기반 POI 추출기**입니다. Google의 `langextract` 라이브러리를 활용하여 마크다운 텍스트에서 장소(POI) 정보를 구조적으로 추출합니다.
+
+- **모델**: `gemini-2.5-flash` (기본값)
+- **Few-shot 예시**: 일본 라멘집 리뷰에서 POI를 추출하는 예시가 포함되어 있습니다.
+
+#### `JinaReader.py`
+
+**Jina AI Reader**를 사용하여 URL에서 마크다운 텍스트를 추출하는 클라이언트입니다.
+
+- **엔드포인트**: `https://r.jina.ai/{url}`
+- **특수 처리**: `blog.naver.com` URL에 대해 `X-With-Iframe` 헤더를 추가합니다.
+
+---
+
 ## 🔗 의존성
 
 - `tavily`: Tavily Python 클라이언트 (WebSearchAgent용)
 - `langchain_tavily`: LangChain Tavily 통합 (LangchainWebSearchAgent용)
+- `langextract`: POI 추출 (LangExtractor용)
 - `httpx`: HTTP 클라이언트
 - `asyncio`: 비동기 처리
 - `app.core.config.settings`: API 키 설정
 - `app.core.models.PoiAgentDataclass.poi`: `PoiSearchResult`, `PoiSource` 데이터클래스
+
+---
+
+## 📊 파일 흐름 다이어그램
+
+```mermaid
+graph TD
+    subgraph WebSearch["WebSearch/"]
+        BASE_WS["BaseWebSearchAgent.py<br/>(ABC)"]
+        WS["WebSearchAgent.py<br/>(Tavily 직접)"]
+        LWS["LangchainWebSearchAgent.py<br/>(LangChain)"]
+
+        subgraph Extractor["Extractor/"]
+            BASE_EX["BaseExtractor.py<br/>(ABC)"]
+            LANG_EX["LangExtractor.py<br/>(langextract)"]
+            JINA["JinaReader.py<br/>(Jina AI)"]
+        end
+    end
+
+    BASE_WS -->|상속| WS
+    BASE_WS -->|상속| LWS
+    BASE_EX -->|상속| LANG_EX
+
+    subgraph 외부 API
+        TAVILY["Tavily API"]
+        GEMINI["Gemini API"]
+        JINA_API["Jina AI Reader API"]
+    end
+
+    TAVILY --> WS
+    TAVILY --> LWS
+    GEMINI --> LANG_EX
+    JINA_API --> JINA
+
+    subgraph 입력
+        QUERIES["queries: List&lt;str&gt;"]
+        URL_IN["url: str"]
+    end
+
+    QUERIES -->|"search() / search_multiple()"| WS
+    QUERIES -->|"search() / search_multiple()"| LWS
+    URL_IN -->|"read()"| JINA
+    JINA -->|"raw_content (markdown)"| LANG_EX
+    LANG_EX -->|"extract()"| POI_RESULTS
+
+    WS -->|"List&lt;PoiSearchResult&gt;"| POI_RESULTS["PoiSearchResult 리스트"]
+    LWS -->|"List&lt;PoiSearchResult&gt;"| POI_RESULTS
+```
 
 ---
 

@@ -16,7 +16,7 @@ class GenInitItineraryService:
         poi_graph: PoiGraph,
         planner: Planner,
     ):
-        self.travel_persona_agent = travel_persona_agent
+        self. travel_persona_agent = travel_persona_agent
         self.poi_graph = poi_graph
         self.planner = planner
 
@@ -33,7 +33,7 @@ class GenInitItineraryService:
 
         # 2. POI 리스트 생성
         logger.info("Step 2: POI 리스트 생성 시작")
-        poi_list = await self.poi_graph.run(
+        poi_list, _ = await self.poi_graph.run(
             persona_summary=persona_summary,
             travel_destination=request.travelCity,
             start_date=request.arrivalDate,
@@ -44,7 +44,7 @@ class GenInitItineraryService:
         # 3. 일정 생성
         logger.info("Step 3: 일정 생성 시작")
         itineraries = await self.planner.run(
-            pois=poi_list,
+            pois=poi_list[:10],
             travel_destination=request.travelCity,
             travel_start_date=request.arrivalDate,
             travel_end_date=request.departureDate,
