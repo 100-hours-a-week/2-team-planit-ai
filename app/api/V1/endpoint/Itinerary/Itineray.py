@@ -2,22 +2,22 @@ from fastapi import APIRouter, Depends
 import time
 
 from app.schemas.persona import ItineraryRequest
-# from app.schemas.Itinerary import ItineraryResponse
-# from app.service.Ininerary.gen_init_Ininerary import GenInitItineraryService
-# from app.api.deps import get_gen_itinerary_service
+from app.schemas.Itinerary import ItineraryResponse
+from app.service.Ininerary.gen_init_Ininerary import GenInitItineraryService
+from app.api.deps import get_gen_itinerary_service
 
 router = APIRouter(prefix="/itinerary", tags=["Itinerary"])
 
 
-# @router.post("/gen", response_model=ItineraryResponse)
-# async def gen_itinerary_endpoint(
-#     request: ItineraryRequest,
-#     service: GenInitItineraryService = Depends(get_gen_itinerary_service),
-# ):
-#     return await service.gen_init_itinerary(request)
+@router.post("", response_model=ItineraryResponse)
+async def gen_itinerary_endpoint(
+    request: ItineraryRequest,
+    service: GenInitItineraryService = Depends(get_gen_itinerary_service),
+):
+    return await service.gen_init_itinerary(request)
 
 
-@router.post("")
+@router.post("/gen_dummy")
 def gen_itinerary_dummy(request: ItineraryRequest):
     """더미 응답을 반환하는 테스트 엔드포인트"""
     time.sleep(10)

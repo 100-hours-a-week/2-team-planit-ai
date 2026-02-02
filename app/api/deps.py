@@ -16,7 +16,9 @@ from app.core.Prompt.PersonaAgentPrompt import PERSONA_SYSTEM_PROMPT, PERSONA_GE
 
 def get_gen_itinerary_service() -> GenInitItineraryService:
     llm_client = VllmClient()
-    langchain_client = LangchainClient()
+    langchain_client = LangchainClient(
+        base_url=settings.vllm_base_url
+    )
 
     persona_agent = TravelPersonaAgent(
         llm_client=llm_client,
