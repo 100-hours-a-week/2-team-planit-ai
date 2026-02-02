@@ -24,7 +24,7 @@ class VllmClient(BaseLLMClient):
         base_url: str = settings.vllm_base_url,
         timeout: int = settings.llm_client_timeout,
         max_retries: int = settings.llm_client_max_retries,
-        max_tokens: int = settings.llm_client_max_tokens,
+        max_tokens: int = settings.vllm_client_max_tokens,
         temperature: float = settings.llm_client_temperature,
         top_p: float = settings.llm_client_top_p,
 
@@ -185,7 +185,14 @@ class VllmClient(BaseLLMClient):
             "max_tokens": self.max_tokens,
             "top_p": self.top_p,
             "stream": False,
-            "guided_json": model.model_json_schema()
+            "repetition_penalty": 1.1,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "result",
+                    "schema": model.model_json_schema()
+                }
+            }
         }
 
         if self.temperature is not None:
@@ -218,7 +225,7 @@ class VllmClient(BaseLLMClient):
                             content = self.stripJsonCodeFence(content)
                             return model.model_validate_json(content)
                         except Exception as e:
-                            raise Exception(f"JSON 파싱 오류: {str(e)}\nContent: {content}")
+                            raise Exception(f"JSON 파싱 오류: {str(e)}\nContent: {data}")
                     
                     raise Exception("LLM 응답에 choices가 없습니다.")
 
