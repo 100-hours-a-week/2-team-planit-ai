@@ -1,18 +1,15 @@
-from typing import List, Dict, Optional, TypedDict
+from typing import List, Dict
 from langgraph.graph import StateGraph, END
 from app.core.models.PersonaAgentDataclass.persona import QAItem, Persona
-from app.core.models.LlmClientDataclass.ChatMessageDataclass import ChatMessage, MessageData
 from app.schemas.persona import ItineraryRequest
 from app.core.LLMClient.BaseLlmClient import BaseLLMClient
-import logging
-
-logger = logging.getLogger(__name__)
+from typing import TypedDict, Optional
 
 class TravelPersonaState(TypedDict):
     itinerary_request: Optional[ItineraryRequest]
     qa_items: List[QAItem]
     final_persona: Optional[Persona]
-    messages: Optional[ChatMessage]
+    messages: List[Dict[str, str]]
 
 
 
@@ -52,22 +49,17 @@ class TravelPersonaAgent:
             qa_answers=qa_items_to_qa_answers(state["qa_items"]),
         )
 
-        logger.info(user_prompt)
-
-        messages = ChatMessage(content=[
-            MessageData(role="system", content=self.system_prompt),
-            MessageData(role="user", content=user_prompt),
-        ])
-
+        messages = self.system_prompt + "\n\n" + user_prompt
+        
         return {
             "messages": messages,
         }
 
-    async def finalize_persona(self, state: TravelPersonaState) -> TravelPersonaState:
+    def finalize_persona(self, state: TravelPersonaState) -> TravelPersonaState:
         """
         수집된 정보들을 바탕으로 최종 페르소나를 생성하는 단계
         """
-        response = await self.llm.call_llm(state["messages"])
+        response = self.llm.call_llm(state["messages"])
         
         answer = response.split("<final_response>")[1].split("</final_response>")[0]
         

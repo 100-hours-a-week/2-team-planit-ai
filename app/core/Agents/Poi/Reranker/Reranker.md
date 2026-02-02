@@ -8,26 +8,6 @@
 
 ## 📄 파일
 
-### `BaseReranker.py`
-
-리랭킹 에이전트의 **추상 기본 클래스(Abstract Base Class)**를 정의합니다.
-
-#### 🏗️ 클래스: `BaseReranker(ABC)`
-
-**설명**: 리랭킹 에이전트가 구현해야 하는 인터페이스를 정의하는 추상 클래스입니다.
-
-##### 🔧 메서드 (Methods)
-
-**`rerank(results: List[PoiSearchResult], persona_summary: str) -> List[PoiSearchResult]`** *(추상, 비동기)*
-
-- **설명**: 검색 결과를 페르소나 기반으로 리랭킹합니다.
-
-**`rerank_batch(web_results, embedding_results, persona_summary) -> tuple[List[PoiSearchResult], List[PoiSearchResult]]`** *(추상, 비동기)*
-
-- **설명**: 웹 검색 결과와 임베딩 검색 결과를 동시에 리랭킹합니다.
-
----
-
 ### `Reranker.py`
 
 ---
@@ -91,38 +71,6 @@
 
 - **설명**: LLM 응답에서 점수를 파싱합니다.
 - **반환값**: `List[float]` - 점수 리스트 (0.0~1.0 범위로 클램핑)
-
----
-
-## 📊 파일 흐름 다이어그램
-
-```mermaid
-graph TD
-    subgraph Reranker["Reranker/"]
-        BASE_R["BaseReranker.py<br/>(ABC)"]
-        RERANKER["Reranker.py"]
-    end
-
-    BASE_R -->|상속| RERANKER
-
-    subgraph 입력
-        RESULTS["List&lt;PoiSearchResult&gt;"]
-        PERSONA["persona_summary"]
-    end
-
-    subgraph 외부 의존성
-        LLM["BaseLLMClient"]
-        MSG["ChatMessageDataclass"]
-    end
-
-    RESULTS --> RERANKER
-    PERSONA --> RERANKER
-    LLM --> RERANKER
-    MSG --> RERANKER
-
-    RERANKER -->|"rerank()"| SCORED["점수 평가 (LLM)"]
-    SCORED -->|"정렬 + top_n"| OUTPUT["List&lt;PoiSearchResult&gt;<br/>(리랭킹됨)"]
-```
 
 ---
 
