@@ -39,6 +39,7 @@ class LangchainClient:
         """
         self.llm = ChatOpenAI(
             base_url=f"{base_url.rstrip('/')}/v1",
+            api_key=api_key,
             model=model,
             temperature=temperature,
             max_tokens=max_tokens,

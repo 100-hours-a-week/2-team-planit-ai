@@ -309,7 +309,7 @@ class LangExtractor(BaseExtractor):
                 "text_or_documents": raw_content,
                 "prompt_description": _EXTRACTION_PROMPT,
                 "examples": _EXTRACTION_EXAMPLES,
-                "model_url": settings.langextract_api_key,
+                "api_key": settings.langextract_api_key,
                 # "max_workers": 10
             }
             
