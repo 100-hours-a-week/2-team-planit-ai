@@ -96,14 +96,12 @@
 
 ##### 🔧 메서드 (Methods)
 
-**`__init__(embedding_pipeline: BaseEmbeddingPipeline, collection_name: str = "poi_embeddings", persist_directory: Optional[str] = None, use_persistent: bool = True)`**
+**`__init__(collection_name: str = "poi_embeddings", persist_directory: Optional[str] = None)`**
 
 - **설명**: VectorSearchAgent 인스턴스를 생성합니다.
 - **파라미터**:
-  - `embedding_pipeline` (`BaseEmbeddingPipeline`): 텍스트 임베딩 변환 파이프라인
   - `collection_name` (`str`, 기본값: `"poi_embeddings"`): 사용할 ChromaDB 컬렉션 이름
-  - `persist_directory` (`Optional[str]`, 기본값: `None`): 데이터를 영구 저장할 디렉토리
-  - `use_persistent` (`bool`, 기본값: `True`): `False`이면 인메모리 모드로 동작
+  - `persist_directory` (`Optional[str]`, 기본값: `None`): 데이터를 영구 저장할 디렉토리. `None`이면 인메모리 모드로 동작
 
 ---
 
@@ -152,61 +150,26 @@
 
 ---
 
-**`_build_metadata(poi: PoiData) -> dict`** *(정적 메서드)*
-
-- **설명**: PoiData에서 ChromaDB metadata dict를 생성합니다. Google Maps 필드, 영업시간 등 **전체 필드**를 포함합니다.
-- **저장되는 메타데이터**:
-  - 기본: `name`, `category`, `description`, `city`, `address`, `source`, `source_url`
-  - Google Maps: `google_place_id`, `latitude`, `longitude`, `google_maps_uri`, `types`, `primary_type`
-  - 상세: `google_rating`, `user_rating_count`, `price_level`, `price_range`, `website_uri`, `phone_number`
-  - 영업시간: `opening_hours` (JSON 직렬화)
-
----
-
-**`_reconstruct_poi_data(doc_id: str, metadata: dict, document: str) -> PoiData`** *(정적 메서드)*
-
-- **설명**: ChromaDB metadata에서 PoiData 객체를 재구성합니다.
-- **파라미터**:
-  - `doc_id` (`str`): ChromaDB 문서 ID (= poi_id)
-  - `metadata` (`dict`): ChromaDB metadata
-  - `document` (`str`): 저장된 raw_text
-- **반환값**: `PoiData` - 재구성된 POI 데이터
-
----
-
 **`add_poi(poi: PoiData) -> bool`** *(비동기)*
 
-- **설명**: 단일 POI 데이터를 벡터 DB에 추가합니다. `_build_metadata()`를 사용하여 전체 필드를 metadata에 저장합니다.
+- **설명**: 단일 POI 데이터를 벡터 DB에 추가합니다.
 - **파라미터**:
   - `poi` (`PoiData`): 추가할 POI 데이터
 - **반환값**: `bool` - 추가 성공 여부
+- **저장되는 메타데이터**:
+  - `name`, `category`, `description`, `address`, `source`, `source_url`
 
 ---
 
 **`add_pois_batch(pois: List[PoiData]) -> int`** *(비동기)*
 
-- **설명**: 여러 POI 데이터를 배치로 추가합니다. **중복 ID를 자동으로 필터링**합니다.
+- **설명**: 여러 POI 데이터를 배치로 추가합니다.
 - **파라미터**:
   - `pois` (`List[PoiData]`): 추가할 POI 데이터 리스트
 - **반환값**: `int` - 성공적으로 추가된 POI 개수. 빈 리스트나 오류 시 `0` 반환
-- **중복 제거 로직**:
-  1. 배치 내 중복 ID 제거 (첫 번째 항목 유지)
-  2. `collection.get(ids=...)`로 컬렉션에 이미 존재하는 ID 필터링
-  3. 새로운 POI만 추가
-
----
-
-**`search_with_data(query_embedding, k, city_filter) -> List[Tuple[PoiSearchResult, PoiData]]`** *(비동기)*
-
-- **설명**: 임베딩 벡터로 유사도 검색을 수행하고, metadata에서 `PoiData`를 복원하여 함께 반환합니다.
-- **반환값**: `List[Tuple[PoiSearchResult, PoiData]]` - 검색 결과와 복원된 PoiData의 쌍
-
----
-
-**`search_by_text_with_data(query, k, city_filter) -> List[Tuple[PoiSearchResult, PoiData]]`** *(비동기)*
-
-- **설명**: 텍스트 쿼리로 검색하고, metadata에서 `PoiData`를 복원하여 함께 반환합니다. `PoiGraph._embedding_search`에서 사용됩니다.
-- **반환값**: `List[Tuple[PoiSearchResult, PoiData]]` - 검색 결과와 복원된 PoiData의 쌍
+- **동작 방식**:
+  1. 모든 POI의 ID, 문서, 메타데이터를 리스트로 수집
+  2. 한 번의 `add()` 호출로 배치 저장
 
 ---
 
@@ -218,53 +181,7 @@
 
 ---
 
-## 📊 파일 흐름 다이어그램
-
-```mermaid
-graph TD
-    subgraph VectorDB["VectorDB/"]
-        BASE_VS["BaseVectorSearchAgent.py<br/>(ABC)"]
-        VS["VectorSearchAgent.py<br/>(ChromaDB)"]
-
-        subgraph EP["EmbeddingPipeline/"]
-            BASE_EP["BaseEmbeddingPipeline.py"]
-            EP_IMPL["EmbeddingPipeline.py"]
-        end
-    end
-
-    BASE_VS -->|상속| VS
-    BASE_EP -->|상속| EP_IMPL
-    EP_IMPL -->|"임베딩 변환"| VS
-
-    subgraph 저장소
-        CHROMA["ChromaDB<br/>(PersistentClient)"]
-    end
-
-    VS -->|"add_poi() / add_pois_batch()"| CHROMA
-    CHROMA -->|"search() / search_by_text()"| VS
-
-    subgraph 입력
-        POI_DATA["PoiData"]
-        QUERY_TEXT["query: str"]
-        QUERY_VEC["query_embedding: List&lt;float&gt;"]
-    end
-
-    subgraph 출력
-        RESULT["List&lt;PoiSearchResult&gt;"]
-        RESULT_DATA["List&lt;Tuple&lt;PoiSearchResult, PoiData&gt;&gt;"]
-    end
-
-    POI_DATA -->|"add"| VS
-    QUERY_TEXT -->|"search_by_text()"| VS
-    QUERY_VEC -->|"search()"| VS
-    VS --> RESULT
-    VS -->|"search_*_with_data()"| RESULT_DATA
-```
-
----
-
 ## 🔗 의존성
 
 - `chromadb`: 벡터 데이터베이스
-- `json`: metadata 직렬화/역직렬화 (types, opening_hours)
-- `app.core.models.PoiAgentDataclass.poi`: `PoiSearchResult`, `PoiData`, `PoiCategory`, `PoiSource`, `OpeningHours` 데이터클래스
+- `app.core.models.PoiAgentDataclass.poi`: `PoiSearchResult`, `PoiData`, `PoiSource` 데이터클래스

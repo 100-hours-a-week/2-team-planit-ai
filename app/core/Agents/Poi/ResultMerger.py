@@ -74,12 +74,13 @@ class ResultMerger:
         merged = list(scored_results.values())
         merged.sort(key=lambda x: x.relevance_score, reverse=True)
         
-        return merged
+        return merged[:max_results]
     
     def _get_result_key(self, result: PoiSearchResult) -> str:
         """결과 중복 체크용 키 생성"""
+        # URL이 있으면 URL 기반, 없으면 제목 기반
+        if result.url:
+            return result.url
         if result.poi_id:
             return f"poi:{result.poi_id}"
-        if result.url:
-            return f"url:{result.url}"
-        return f"title:{result.title}"
+        return f"title:{result.title.lower()}"

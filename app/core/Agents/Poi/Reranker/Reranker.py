@@ -61,7 +61,11 @@ class Reranker(BaseReranker):
         """
         if not results:
             return []
-
+        
+        if len(results) <= self.top_n:
+            # 결과가 top_n 이하면 그대로 반환
+            return results
+        
         # 검색 결과를 텍스트로 변환
         results_text = self._format_results(results)
         

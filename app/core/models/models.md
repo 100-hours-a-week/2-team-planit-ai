@@ -10,10 +10,9 @@
 
 | 폴더명 | 설명 | 주요 모델 |
 |--------|------|-----------|
-| [`LlmClientDataclass/`](./LlmClientDataclass/LLMClientDataclass.md) | LLM 클라이언트용 데이터 모델 | `MessageData`, `ChatMessage` |
-| [`PersonaAgentDataclass/`](./PersonaAgentDataclass/PersonaAgentDataclass.md) | 페르소나 에이전트용 데이터 모델 | `QAItem`, `Persona` |
-| [`PoiAgentDataclass/`](./PoiAgentDataclass/POIAgentDataclass.md) | POI 에이전트용 데이터 모델 | `PoiData`, `PoiSearchResult`, `PoiInfo`, `PoiAgentState` |
-| [`ItineraryAgentDataclass/`](./ItineraryAgentDataclass/) | 여행 일정 에이전트용 데이터 모델 | `Transfer`, `Itinerary`, `ItineraryPlanState`, `TravelMode` |
+| [`LlmClientDataclass/`](./LlmClientDataclass/README.md) | LLM 클라이언트용 데이터 모델 | `MessageData`, `ChatMessgage` |
+| [`PersonaAgentDataclass/`](./PersonaAgentDataclass/README.md) | 페르소나 에이전트용 데이터 모델 | `QAItem`, `Persona` |
+| [`PoiAgentDataclass/`](./PoiAgentDataclass/README.md) | POI 에이전트용 데이터 모델 | `PoiData`, `PoiSearchResult`, `PoiInfo`, `PoiAgentState` |
 
 ---
 
@@ -45,33 +44,6 @@ QAItem                           Persona
 
 ---
 
-### ItineraryAgentDataclass
-
-여행 일정 생성 파이프라인에서 사용되는 데이터 모델
-
-```
-TravelMode (Enum)
-├── DRIVING | WALKING | TRANSIT | BICYCLING
-
-Transfer                         Itinerary
-├── from_poi_id: str            ├── date: str (YYYY-MM-DD)
-├── to_poi_id: str              ├── pois: List[PoiData]
-├── travel_mode: TravelMode     ├── transfers: List[Transfer]
-├── duration_minutes: int       └── total_duration_minutes: int
-└── distance_km: float
-
-ItineraryPlanState (LangGraph 상태)
-├── pois, travel_destination, travel_start_date, travel_end_date
-├── total_budget, persona_summary
-├── itineraries, validation_feedback, schedule_feedback
-├── is_poi_sufficient, poi_enrich_attempts
-├── iteration_count, previous_poi_ids, is_poi_changed
-├── best_itineraries
-└── task_queue, current_task
-```
-
----
-
 ### PoiAgentDataclass
 
 POI 검색 파이프라인 전체에서 사용되는 데이터 모델
@@ -89,57 +61,6 @@ PoiAgentState (LangGraph 상태)
 ├── reranked_web_results / reranked_embedding_results
 ├── merged_results
 └── final_pois
-```
-
----
-
-## 📊 모델 관계 다이어그램
-
-```mermaid
-graph TD
-    subgraph Models["models/"]
-        subgraph LLM["LlmClientDataclass/"]
-            MSG["MessageData"]
-            CHAT["ChatMessage"]
-        end
-
-        subgraph Persona["PersonaAgentDataclass/"]
-            QA["QAItem"]
-            PER["Persona"]
-        end
-
-        subgraph POI["PoiAgentDataclass/"]
-            PD["PoiData"]
-            PSR["PoiSearchResult"]
-            PI["PoiInfo"]
-            PAS["PoiAgentState"]
-        end
-
-        subgraph Itin["ItineraryAgentDataclass/"]
-            TM["TravelMode (Enum)"]
-            TR["Transfer"]
-            IT["Itinerary"]
-            IPS["ItineraryPlanState"]
-        end
-    end
-
-    MSG -->|"content"| CHAT
-
-    QA -->|"설문 → 페르소나 생성"| PER
-    PER -->|"persona_summary"| PAS
-    PER -->|"persona_summary"| IPS
-
-    PSR -->|"검색 → 수집"| PD
-    PD -->|"요약"| PI
-    PI -->|"final_pois"| PAS
-
-    PD -->|"pois"| IT
-    TM -->|"travel_mode"| TR
-    TR -->|"transfers"| IT
-    IT -->|"itineraries"| IPS
-
-    PAS -->|"PoiGraph 상태"| POI_GRAPH["PoiGraph"]
-    IPS -->|"Planner 상태"| PLANNER["Planner"]
 ```
 
 ---

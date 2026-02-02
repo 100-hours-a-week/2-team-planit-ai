@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     # LLM Client Settings
     llm_client_timeout: int 
     llm_client_max_retries: int 
-    vllm_client_max_tokens: int 
+    llm_client_max_tokens: int 
     llm_client_temperature: Optional[float] 
     llm_client_top_p: float
 
