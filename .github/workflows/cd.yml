@@ -29,6 +29,36 @@ jobs:
           mv dist/planit-ai.tar.gz planit-ai.tar.gz
           ls -al planit-ai.tar.gz
 
+      - name: Install jq
+        run: |
+          sudo apt-get update -y >/dev/null
+          sudo apt-get install -y jq >/dev/null
+
+      # =========================
+      # RunPod: podId 조회 -> proxy base url 즉시 생성 (폴링 없음)
+      # =========================
+      - name: Resolve VLLM_BASE_URL from RunPod (no polling)
+        id: runpod
+        shell: bash
+        env:
+          RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+        run: |
+          set -euo pipefail
+
+          pods="$(curl -fsS --max-time 25 \
+            --request GET \
+            --url "https://rest.runpod.io/v1/pods" \
+            --header "Authorization: Bearer ${RUNPOD_API_KEY}")"
+
+          pod_id="$(echo "$pods" | jq -r '.[0].id // .[0].pod.id // empty')"
+          if [ -z "$pod_id" ] || [ "$pod_id" = "null" ]; then
+            echo "No pods found from RunPod."
+            exit 1
+          fi
+
+          echo "pod_id=$pod_id" >> "$GITHUB_OUTPUT"
+          echo "vllm_base_url=https://${pod_id}-8000.proxy.runpod.net/v1" >> "$GITHUB_OUTPUT"
+
       - name: Get GitHub Actions IP
         id: get-ip
         uses: haythem/public-ip@v1.3
@@ -56,18 +86,18 @@ jobs:
           source: "planit-ai.tar.gz"
           target: "/home/${{ secrets.EC2_USERNAME }}/temp_ai"
 
-      - name: Deploy to EC2 (tar, build venv on EC2, keep log path, dotenv from secret)
+      - name: Deploy to EC2 (tar, build venv on EC2, reset .env + patch VLLM_BASE_URL)
         uses: appleboy/ssh-action@v1.0.3
         env:
           AI_DOTENV_PROD: ${{ secrets.AI_DOTENV_PROD }}
+          NEW_VLLM_BASE_URL: ${{ steps.runpod.outputs.vllm_base_url }}
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USERNAME }}
           key: ${{ secrets.EC2_SSH_KEY }}
-          envs: AI_DOTENV_PROD
+          envs: AI_DOTENV_PROD,NEW_VLLM_BASE_URL
           script: |
             set -e
-            set -x
             trap 'echo "FAILED at line $LINENO"; exit 1' ERR
 
             EC2_USER="$(whoami)"
@@ -81,8 +111,6 @@ jobs:
             echo "STEP: prepare dirs"
             sudo mkdir -p "$BASE"
             sudo chown -R "${EC2_USER}:${EC2_USER}" "$BASE"
-
-            # scp target 디렉토리 없을 수도 있어서 보장
             mkdir -p "/home/${EC2_USER}/temp_ai"
 
             echo "STEP: prepare tmp"
@@ -90,7 +118,6 @@ jobs:
             rm -rf "$TMP"/*
 
             echo "STEP: check tar"
-            ls -al "/home/${EC2_USER}/temp_ai" || true
             test -f "$TAR_IN"
 
             echo "STEP: move tar"
@@ -108,16 +135,29 @@ jobs:
             rm -rf "$APP_DIR"
             mv "$TMP/planit-ai" "$APP_DIR"
 
-            echo "STEP: write .env (next to uv.lock)"
-            printf "%s" "$AI_DOTENV_PROD" > "$APP_DIR/.env"
-            chmod 600 "$APP_DIR/.env"
+            echo "STEP: reset .env from secret + patch VLLM_BASE_URL"
+            ENV_FILE="$APP_DIR/.env"
+            if [ -f "$ENV_FILE" ]; then
+              cp "$ENV_FILE" "$ENV_FILE.bak.$(date +%Y%m%d_%H%M%S)" || true
+            fi
+
+            # Secret로 .env 통째로 재생성
+            printf "%s" "$AI_DOTENV_PROD" > "$ENV_FILE"
+
+            # VLLM_BASE_URL만 덮어쓰기(따옴표 유지/강제)
+            if grep -qE '^VLLM_BASE_URL=' "$ENV_FILE"; then
+              sed -i "s|^VLLM_BASE_URL=.*|VLLM_BASE_URL=\"${NEW_VLLM_BASE_URL}\"|" "$ENV_FILE"
+            else
+              echo "VLLM_BASE_URL=\"${NEW_VLLM_BASE_URL}\"" >> "$ENV_FILE"
+            fi
+            chmod 600 "$ENV_FILE"
 
             echo "STEP: remove project venv if exists"
             rm -rf "$APP_DIR/.venv" || true
 
             echo "STEP: ensure bootstrap venv for uv (PEP668-safe)"
-            python3 --version
             BOOT_VENV="$BASE/.bootstrap-venv"
+            python3 --version
             python3 -m venv "$BOOT_VENV" || true
             "$BOOT_VENV/bin/python" -m pip install -U pip
             "$BOOT_VENV/bin/pip" install -U uv

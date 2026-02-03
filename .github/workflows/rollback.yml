@@ -1,44 +1,102 @@
 name: Rollback - AI
 
 on:
-  workflow_dispatch:  # 수동 실행
+  workflow_dispatch:
+    inputs:
+      cd_run_id:
+        description: "Rollback target CD Run ID"
+        required: false
+        type: string
 
 jobs:
   ai-rollback:
     runs-on: ubuntu-latest
-    
+    env:
+      RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # 마지막으로 성공한 CI ID 조회
-      - name: Find CI ID
+      - name: Find target CD run id
         id: find_run
-        run: |
-          RUN_ID=$(gh run list --workflow "CI - AI" --status success --limit 1 --json databaseId --jq '.[0].databaseId')
-          
-          if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
-            echo "성공한 CI ID를 찾을 수 없습니다."
-            exit 1
-          fi
-          
-          echo "target_id=$RUN_ID" >> $GITHUB_OUTPUT
-          
-          RUN_URL=$(gh run view $RUN_ID --json url --jq '.url')
-          echo "run_url=$RUN_URL" >> $GITHUB_OUTPUT
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
 
-      # CI에서 빌드한 wheel 다운로드
-      - name: Download Build Artifact
+          if [ -n "${{ inputs.cd_run_id }}" ]; then
+            RUN_ID="${{ inputs.cd_run_id }}"
+          else
+            RUN_ID="$(gh run list \
+              --workflow "CD - AI" \
+              --status success \
+              --limit 1 \
+              --json databaseId \
+              --jq '.[0].databaseId')"
+          fi
+
+          if [ -z "${RUN_ID:-}" ] || [ "${RUN_ID}" = "null" ]; then
+            echo "성공한 CD - AI Run ID를 찾을 수 없습니다."
+            exit 1
+          fi
+
+          echo "target_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+          RUN_URL="$(gh run view "$RUN_ID" --json url --jq '.url')"
+          echo "run_url=$RUN_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Download Build Artifact (tar.gz) from target CD run
         uses: actions/download-artifact@v4
         with:
-          name: ai-wheel 
+          name: planit-ai-tar
           path: dist
           run-id: ${{ steps.find_run.outputs.target_id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      # GitHub Actions IP를 AWS SG에 일시적으로 등록하기
+      - name: Flatten artifact path
+        shell: bash
+        run: |
+          set -euo pipefail
+          mv dist/planit-ai.tar.gz planit-ai.tar.gz
+          ls -al planit-ai.tar.gz
+
+
+      - name: Install jq
+        run: |
+          sudo apt-get update -y >/dev/null
+          sudo apt-get install -y jq >/dev/null
+
+      - name: List pods and select first (for base URL)
+        id: list_pods
+        shell: bash
+        run: |
+          set -euo pipefail
+          pods="$(curl -fsS --max-time 25 \
+            --request GET \
+            --url "https://rest.runpod.io/v1/pods" \
+            --header "Authorization: Bearer ${RUNPOD_API_KEY}")"
+
+          pod_id="$(echo "$pods" | jq -r '.[0].id // .[0].pod.id // empty')"
+
+          if [ -z "$pod_id" ] || [ "$pod_id" = "null" ]; then
+            echo "No pods found in RunPod. (Need at least 1 pod to build proxy URL)"
+            exit 1
+          fi
+
+          echo "pod_id=$pod_id" >> "$GITHUB_OUTPUT"
+
+      - name: Build VLLM base URL (proxy)
+        id: endpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          POD="${{ steps.list_pods.outputs.pod_id }}"
+          V1="https://${POD}-8000.proxy.runpod.net/v1"
+          echo "vllm_base_url=$V1" >> "$GITHUB_OUTPUT"
+          echo "Resolved base url: $V1"
+
+
       - name: Get GitHub Actions IP
         id: get-ip
         uses: haythem/public-ip@v1.3
@@ -48,7 +106,9 @@ jobs:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_REGION: ap-northeast-2
+        shell: bash
         run: |
+          set -euo pipefail
           aws ec2 authorize-security-group-ingress \
             --group-id ${{ secrets.SECURITY_GROUP_ID }} \
             --protocol tcp \
@@ -57,86 +117,131 @@ jobs:
             || echo "IP may already be in security group"
           sleep 10
 
-      # wheel을 EC2로 전송
-      - name: Copy wheel to EC2
+
+      - name: Copy tar.gz to EC2
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USERNAME }}
           key: ${{ secrets.EC2_SSH_KEY }}
-          source: "dist/*.whl"
-          target: "/home/ubuntu/temp_ai"
-          strip_components: 1
+          source: "planit-ai.tar.gz"
+          target: "/home/${{ secrets.EC2_USERNAME }}/temp_ai"
 
-      # 서버 접속 후 기존 프로세스 종료 및 새 wheel 설치/실행
-      - name: Deploy to EC2
+
+      - name: Rollback Deploy to EC2 (tar, uv sync, write .env, override VLLM_BASE_URL)
         uses: appleboy/ssh-action@v1.0.3
+        env:
+          AI_DOTENV_PROD: ${{ secrets.AI_DOTENV_PROD }}
+          NEW_VLLM_BASE_URL: ${{ steps.endpoint.outputs.vllm_base_url }}
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USERNAME }}
           key: ${{ secrets.EC2_SSH_KEY }}
+          envs: AI_DOTENV_PROD,NEW_VLLM_BASE_URL
           script: |
-            # 폴더 이동 및 정리
-            sudo mkdir -p /var/www/planit/ai
-            sudo mkdir -p /var/www/planit/ai_backup
+            set -e
+            set -x
+            trap 'echo "FAILED at line $LINENO"; exit 1' ERR
 
-            # 기존 wheel 있으면 백업 폴더로 이동(폴더 1개 = 배포 1개)
-            if ls /var/www/planit/ai/*.whl >/dev/null 2>&1; then
-              TS=$(date +%Y%m%d_%H%M%S)
-              sudo mkdir -p /var/www/planit/ai_backup/$TS
-              sudo mv /var/www/planit/ai/*.whl /var/www/planit/ai_backup/$TS/ || true
+            EC2_USER="$(whoami)"
+
+            BASE="/var/www/planit/ai"
+            APP_DIR="$BASE/app"
+            LOG="$BASE/app.log"
+            TMP="/tmp/planit-ai-deploy"
+            TAR_IN="/home/${EC2_USER}/temp_ai/planit-ai.tar.gz"
+
+            echo "STEP: prepare dirs"
+            sudo mkdir -p "$BASE"
+            sudo chown -R "${EC2_USER}:${EC2_USER}" "$BASE"
+
+            mkdir -p "/home/${EC2_USER}/temp_ai"
+
+            echo "STEP: prepare tmp"
+            mkdir -p "$TMP"
+            rm -rf "$TMP"/*
+
+            echo "STEP: check tar"
+            ls -al "/home/${EC2_USER}/temp_ai" || true
+            test -f "$TAR_IN"
+
+            echo "STEP: move tar"
+            mv "$TAR_IN" "$TMP/planit-ai.tar.gz"
+            rm -rf "/home/${EC2_USER}/temp_ai/"* || true
+
+            echo "STEP: extract tar"
+            tar -xzf "$TMP/planit-ai.tar.gz" -C "$TMP"
+
+            echo "STEP: verify extracted"
+            test -f "$TMP/planit-ai/main.py"
+            test -f "$TMP/planit-ai/uv.lock"
+
+            echo "STEP: replace app dir"
+            rm -rf "$APP_DIR"
+            mv "$TMP/planit-ai" "$APP_DIR"
+
+            echo "STEP: write .env (base from secret)"
+            printf "%s" "$AI_DOTENV_PROD" > "$APP_DIR/.env"
+
+            echo "STEP: override VLLM_BASE_URL only (keep quote style)"
+            ENV_FILE="$APP_DIR/.env"
+            if grep -qE '^VLLM_BASE_URL="' "$ENV_FILE"; then
+              sed -i "s|^VLLM_BASE_URL=\".*\"|VLLM_BASE_URL=\"${NEW_VLLM_BASE_URL}\"|" "$ENV_FILE"
+            elif grep -qE "^VLLM_BASE_URL='" "$ENV_FILE"; then
+              sed -i "s|^VLLM_BASE_URL='.*'|VLLM_BASE_URL='${NEW_VLLM_BASE_URL}'|" "$ENV_FILE"
+            elif grep -qE '^VLLM_BASE_URL=' "$ENV_FILE"; then
+              sed -i "s|^VLLM_BASE_URL=.*|VLLM_BASE_URL=\"${NEW_VLLM_BASE_URL}\"|" "$ENV_FILE"
+            else
+              echo "VLLM_BASE_URL=\"${NEW_VLLM_BASE_URL}\"" >> "$ENV_FILE"
             fi
+            chmod 600 "$APP_DIR/.env"
 
-            # 새 wheel을 실행 폴더로 이동
-            sudo mv /home/ubuntu/temp_ai/*.whl /var/www/planit/ai/
-            sudo chown -R ubuntu:ubuntu /var/www/planit/ai /var/www/planit/ai_backup
-            rm -rf /home/ubuntu/temp_ai/*
+            echo "STEP: remove project venv if exists"
+            rm -rf "$APP_DIR/.venv" || true
 
-            # 백업은 최신 5개만 남기고 삭제
-            sudo ls -1dt /var/www/planit/ai_backup/* 2>/dev/null | tail -n +6 | xargs -r sudo rm -rf
+            echo "STEP: ensure bootstrap venv for uv (PEP668-safe)"
+            python3 --version
+            BOOT_VENV="$BASE/.bootstrap-venv"
+            python3 -m venv "$BOOT_VENV" || true
+            "$BOOT_VENV/bin/python" -m pip install -U pip
+            "$BOOT_VENV/bin/pip" install -U uv
 
-            # venv 준비(없으면 생성)
-            python3.11 -m venv ~/planit-venv || true
-            source ~/planit-venv/bin/activate
-            pip install --upgrade pip
+            echo "STEP: uv sync (create project .venv)"
+            cd "$APP_DIR"
+            "$BOOT_VENV/bin/uv" sync --frozen
 
-            # wheel 설치/업데이트
-            WHEEL_PATH=$(ls -1t /var/www/planit/ai/*.whl | head -n 1)
-            pip install --upgrade "$WHEEL_PATH"
-
-            # 기존 8000 포트 프로세스 종료
+            echo "STEP: kill port"
             sudo fuser -k 8000/tcp || true
 
-            # 새 프로세스 실행
-            nohup uvicorn app.main:app \
-              --host localhost \
-              --port 8000 \
-              > /var/www/planit/ai/app.log 2>&1 &
+            echo "STEP: start app"
+            cd "$APP_DIR"
+            nohup ./.venv/bin/python ./main.py > "$LOG" 2>&1 &
 
             echo "Health Check 시작"
-            for retry_count in {1..15}
-            do
+            for retry_count in {1..15}; do
               response=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/health || true)
               if [ "$response" -eq 200 ] || [ "$response" -eq 401 ]; then
                 echo "Server is up (HTTP $response)"
                 exit 0
               fi
-              
               echo "Waiting for server... (Attempt $retry_count/15)"
               sleep 10
             done
+
             echo "Server failed to start."
-            tail -n 200 /var/www/planit/ai/app.log || true
+            tail -n 200 "$LOG" || true
             exit 1
 
-      # AWS SG에서 IP 제거
+
       - name: Remove IP from Security Group
         if: always()
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_REGION: ap-northeast-2
+        shell: bash
         run: |
+          set -euo pipefail
           aws ec2 revoke-security-group-ingress \
             --group-id ${{ secrets.SECURITY_GROUP_ID }} \
             --protocol tcp \
@@ -144,18 +249,25 @@ jobs:
             --cidr ${{ steps.get-ip.outputs.ipv4 }}/32 \
             || echo "Failed to remove IP or rule not found"
 
+
       - name: Send Discord Notification
         if: always()
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        shell: bash
         run: |
+          set -euo pipefail
           STATUS="${{ job.status }}"
-          CI_RUN_URL="${{ steps.find_run.outputs.run_url }}"
-          if [ "$STATUS" = "success" ]; then
-            MSG="Rollback - AI 성공\n 롤백 소스 CI: [링크](${CI_RUN_URL})"
-          else
-            MSG="Rollback - AI 실패"
-          fi
+          SRC="${{ steps.find_run.outputs.run_url }}"
           RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          curl -H "Content-Type: application/json" \
-               -X POST \
-               -d "{\"content\": \"${MSG}\n🔗 [로그 확인](${RUN_URL})\"}" \
-               ${{ secrets.DISCORD_WEBHOOK_URL }}
+          BASE="${{ steps.endpoint.outputs.vllm_base_url }}"
+
+          if [ "$STATUS" = "success" ]; then
+            MSG="Rollback - AI 성공\n롤백 소스(CD): ${SRC}\nVLLM_BASE_URL=${BASE}\n${RUN_URL}"
+          else
+            MSG="Rollback - AI 실패\n${RUN_URL}"
+          fi
+
+          curl -fsS -H "Content-Type: application/json" -X POST \
+            -d "{\"content\":\"${MSG}\"}" \
+            "${DISCORD_WEBHOOK_URL}"
