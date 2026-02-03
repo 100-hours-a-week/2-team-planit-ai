@@ -92,7 +92,7 @@ jobs:
         run: |
           set -euo pipefail
           POD="${{ steps.list_pods.outputs.pod_id }}"
-          V1="https://${POD}-8000.proxy.runpod.net/v1"
+          V1="https://${POD}-8000.proxy.runpod.net"
           echo "vllm_base_url=$V1" >> "$GITHUB_OUTPUT"
           echo "Resolved base url: $V1"
 
@@ -139,14 +139,15 @@ jobs:
           key: ${{ secrets.EC2_SSH_KEY }}
           envs: AI_DOTENV_PROD,NEW_VLLM_BASE_URL
           script: |
-            set -e
-            set -x
+            set -euo pipefail
             trap 'echo "FAILED at line $LINENO"; exit 1' ERR
 
             EC2_USER="$(whoami)"
 
             BASE="/var/www/planit/ai"
             APP_DIR="$BASE/app"
+            PERSIST_DIR="$BASE/persist"
+            DATA_PERSIST="$PERSIST_DIR/data"
             LOG="$BASE/app.log"
             TMP="/tmp/planit-ai-deploy"
             TAR_IN="/home/${EC2_USER}/temp_ai/planit-ai.tar.gz"
@@ -154,7 +155,6 @@ jobs:
             echo "STEP: prepare dirs"
             sudo mkdir -p "$BASE"
             sudo chown -R "${EC2_USER}:${EC2_USER}" "$BASE"
-
             mkdir -p "/home/${EC2_USER}/temp_ai"
 
             echo "STEP: prepare tmp"
@@ -162,7 +162,6 @@ jobs:
             rm -rf "$TMP"/*
 
             echo "STEP: check tar"
-            ls -al "/home/${EC2_USER}/temp_ai" || true
             test -f "$TAR_IN"
 
             echo "STEP: move tar"
@@ -176,32 +175,45 @@ jobs:
             test -f "$TMP/planit-ai/main.py"
             test -f "$TMP/planit-ai/uv.lock"
 
+            echo "STEP: ensure persistent data dir (no migration)"
+            mkdir -p "$DATA_PERSIST"
+            sudo chown -R "${EC2_USER}:${EC2_USER}" "$PERSIST_DIR" || true
+
             echo "STEP: replace app dir"
             rm -rf "$APP_DIR"
             mv "$TMP/planit-ai" "$APP_DIR"
 
-            echo "STEP: write .env (base from secret)"
-            printf "%s" "$AI_DOTENV_PROD" > "$APP_DIR/.env"
+            echo "STEP: link app/app/data -> persistent data"
+            # /var/www/planit/ai/app/app/data 를 영구 경로로 고정
+            rm -rf "$APP_DIR/app/data" || true
+            ln -sfn "$DATA_PERSIST" "$APP_DIR/app/data"
 
-            echo "STEP: override VLLM_BASE_URL only (keep quote style)"
+            echo "CHECK: data link"
+            ls -la "$APP_DIR/app" | grep data || true
+
+            echo "STEP: reset .env from secret + patch VLLM_BASE_URL"
             ENV_FILE="$APP_DIR/.env"
-            if grep -qE '^VLLM_BASE_URL="' "$ENV_FILE"; then
-              sed -i "s|^VLLM_BASE_URL=\".*\"|VLLM_BASE_URL=\"${NEW_VLLM_BASE_URL}\"|" "$ENV_FILE"
-            elif grep -qE "^VLLM_BASE_URL='" "$ENV_FILE"; then
-              sed -i "s|^VLLM_BASE_URL='.*'|VLLM_BASE_URL='${NEW_VLLM_BASE_URL}'|" "$ENV_FILE"
-            elif grep -qE '^VLLM_BASE_URL=' "$ENV_FILE"; then
+            if [ -f "$ENV_FILE" ]; then
+              cp "$ENV_FILE" "$ENV_FILE.bak.$(date +%Y%m%d_%H%M%S)" || true
+            fi
+
+            # Secret로 .env 통째로 재생성
+            printf "%s" "$AI_DOTENV_PROD" > "$ENV_FILE"
+
+            # VLLM_BASE_URL만 덮어쓰기(따옴표 유지/강제)
+            if grep -qE '^VLLM_BASE_URL=' "$ENV_FILE"; then
               sed -i "s|^VLLM_BASE_URL=.*|VLLM_BASE_URL=\"${NEW_VLLM_BASE_URL}\"|" "$ENV_FILE"
             else
               echo "VLLM_BASE_URL=\"${NEW_VLLM_BASE_URL}\"" >> "$ENV_FILE"
             fi
-            chmod 600 "$APP_DIR/.env"
+            chmod 600 "$ENV_FILE"
 
             echo "STEP: remove project venv if exists"
             rm -rf "$APP_DIR/.venv" || true
 
             echo "STEP: ensure bootstrap venv for uv (PEP668-safe)"
-            python3 --version
             BOOT_VENV="$BASE/.bootstrap-venv"
+            python3 --version
             python3 -m venv "$BOOT_VENV" || true
             "$BOOT_VENV/bin/python" -m pip install -U pip
             "$BOOT_VENV/bin/pip" install -U uv
@@ -214,7 +226,6 @@ jobs:
             sudo fuser -k 8000/tcp || true
 
             echo "STEP: start app"
-            cd "$APP_DIR"
             nohup ./.venv/bin/python ./main.py > "$LOG" 2>&1 &
 
             echo "Health Check 시작"
@@ -231,6 +242,7 @@ jobs:
             echo "Server failed to start."
             tail -n 200 "$LOG" || true
             exit 1
+
 
 
       - name: Remove IP from Security Group
