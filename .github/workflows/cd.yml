@@ -57,7 +57,7 @@ jobs:
           fi
 
           echo "pod_id=$pod_id" >> "$GITHUB_OUTPUT"
-          echo "vllm_base_url=https://${pod_id}-8000.proxy.runpod.net/v1" >> "$GITHUB_OUTPUT"
+          echo "vllm_base_url=https://${pod_id}-8000.proxy.runpod.net" >> "$GITHUB_OUTPUT"
 
       - name: Get GitHub Actions IP
         id: get-ip
@@ -97,13 +97,15 @@ jobs:
           key: ${{ secrets.EC2_SSH_KEY }}
           envs: AI_DOTENV_PROD,NEW_VLLM_BASE_URL
           script: |
-            set -e
+            set -euo pipefail
             trap 'echo "FAILED at line $LINENO"; exit 1' ERR
 
             EC2_USER="$(whoami)"
 
             BASE="/var/www/planit/ai"
             APP_DIR="$BASE/app"
+            PERSIST_DIR="$BASE/persist"
+            DATA_PERSIST="$PERSIST_DIR/data"
             LOG="$BASE/app.log"
             TMP="/tmp/planit-ai-deploy"
             TAR_IN="/home/${EC2_USER}/temp_ai/planit-ai.tar.gz"
@@ -131,9 +133,21 @@ jobs:
             test -f "$TMP/planit-ai/main.py"
             test -f "$TMP/planit-ai/uv.lock"
 
+            echo "STEP: ensure persistent data dir (no migration)"
+            mkdir -p "$DATA_PERSIST"
+            sudo chown -R "${EC2_USER}:${EC2_USER}" "$PERSIST_DIR" || true
+
             echo "STEP: replace app dir"
             rm -rf "$APP_DIR"
             mv "$TMP/planit-ai" "$APP_DIR"
+
+            echo "STEP: link app/app/data -> persistent data"
+            # /var/www/planit/ai/app/app/data 를 영구 경로로 고정
+            rm -rf "$APP_DIR/app/data" || true
+            ln -sfn "$DATA_PERSIST" "$APP_DIR/app/data"
+
+            echo "CHECK: data link"
+            ls -la "$APP_DIR/app" | grep data || true
 
             echo "STEP: reset .env from secret + patch VLLM_BASE_URL"
             ENV_FILE="$APP_DIR/.env"
