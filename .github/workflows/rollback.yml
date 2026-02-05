@@ -226,7 +226,10 @@ jobs:
             sudo fuser -k 8000/tcp || true
 
             echo "STEP: start app"
-            nohup ./.venv/bin/python ./main.py > "$LOG" 2>&1 &
+            echo "==================================================" >> "$LOG"
+            echo "[ROLLBACK] $(date '+%F %T %Z') start" >> "$LOG"
+            echo "==================================================" >> "$LOG"
+            nohup ./.venv/bin/python ./main.py >> "$LOG" 2>&1 &
 
             echo "Health Check 시작"
             for retry_count in {1..15}; do
