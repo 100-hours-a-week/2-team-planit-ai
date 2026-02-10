@@ -1,3 +1,6 @@
+import logging
+logger = logging.getLogger(__name__)
+
 import asyncio
 import os
 from typing import List, Optional
@@ -93,7 +96,7 @@ class LangchainWebSearchAgent(BaseWebSearchAgent):
             return results
             
         except Exception as e:
-            print(f"LangChain web search error: {e}")
+            logger.error(f"LangChain web search error: {e}")
             return []
     
     async def search_multiple(

@@ -26,7 +26,12 @@ class TestKeywordExtractorUnit:
     @pytest.mark.asyncio
     async def test_extract_keywords_empty_persona_returns_empty(self, extractor):
         """빈 페르소나 처리 테스트"""
-        result = await extractor.extract_keywords("")
+        result = await extractor.extract_keywords(
+            persona_summary="",
+            destination="서울",
+            start_date="2025-01-01",
+            end_date="2025-01-03"
+        )
         assert result == []
     
     @pytest.mark.unit
@@ -40,7 +45,12 @@ class TestKeywordExtractorUnit:
         </keywords>
         """
         
-        result = await extractor.extract_keywords("테스트 페르소나")
+        result = await extractor.extract_keywords(
+            persona_summary="테스트 페르소나",
+            destination="서울",
+            start_date="2025-01-01",
+            end_date="2025-01-03"
+        )
         
         assert isinstance(result, list)
         assert len(result) == 2
@@ -108,7 +118,12 @@ class TestKeywordExtractorIntegration:
     @pytest.mark.asyncio
     async def test_extract_keywords_with_real_llm(self, extractor):
         """실제 LLM으로 키워드 추출 테스트"""
-        result = await extractor.extract_keywords("혼자 여행하는 20대, 서울 여행")
+        result = await extractor.extract_keywords(
+            persona_summary="혼자 여행하는 20대, 맛집 탐방을 좋아함",
+            destination="서울",
+            start_date="2025-01-01",
+            end_date="2025-01-03"
+        )
         
         print(f"추출된 키워드: {result}")
         assert isinstance(result, list)

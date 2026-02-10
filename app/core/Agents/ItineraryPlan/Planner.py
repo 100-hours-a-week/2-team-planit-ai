@@ -38,7 +38,8 @@ class Planner:
         llm_client: BaseLLMClient,
         langchain_client: LangchainClient,
         poi_graph: Optional[PoiGraph] = None,
-        google_maps_api_key: Optional[str] = None
+        google_maps_api_key: Optional[str] = None,
+        transfer_cache_db_path: Optional[str] = None
     ):
         """
         Args:
@@ -46,11 +47,12 @@ class Planner:
             langchain_client: LangChain 클라이언트 (ItineraryPlanAgent용)
             poi_graph: POI 검색 그래프 (None이면 생성 안 함)
             google_maps_api_key: Google Maps API 키
+            transfer_cache_db_path: Transfer 캐시 SQLite DB 경로 (None이면 기본 경로)
         """
         # 에이전트 초기화
         self.todo_agent = TodoAgent()
         self.itinerary_plan_agent = ItineraryPlanAgent(langchain_client)
-        self.distance_calculate_agent = DistanceCalculateAgent(google_maps_api_key)
+        self.distance_calculate_agent = DistanceCalculateAgent(google_maps_api_key, db_path=transfer_cache_db_path)
         self.constraint_valid_agent = ConstraintValidAgent()
         self.schedule_agent = ScheduleAgent()
         

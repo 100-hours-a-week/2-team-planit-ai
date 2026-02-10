@@ -42,7 +42,6 @@ class BaseLLMClient(ABC):
         return MessageData(role=dict["role"], content=dict["content"])  
 
     def chatMessageToDictList(self, chatMessage: ChatMessage) -> List[Dict[str, str]]:
-        print(chatMessage)
         return [self.messageDataToDict(message) for message in chatMessage.content]
     
     def dictListToChatMessage(self, messages: List[Dict[str, str]]) -> ChatMessage:
