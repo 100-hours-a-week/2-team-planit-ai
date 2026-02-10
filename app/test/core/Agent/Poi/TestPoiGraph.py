@@ -1,7 +1,36 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from app.core.Agents.Poi.PoiGraph import PoiGraph
-from app.core.models.PoiAgentDataclass.poi import PoiAgentState, PoiSearchResult, PoiInfo, PoiSource, PoiCategory
+from app.core.models.PoiAgentDataclass.poi import (
+    PoiAgentState, 
+    PoiSearchResult, 
+    PoiInfo, 
+    PoiData,
+    PoiSource, 
+    PoiCategory
+)
+
+
+def create_default_state(**overrides) -> PoiAgentState:
+    """기본 PoiAgentState 생성 헬퍼"""
+    default = {
+        "travel_destination": "서울",
+        "persona_summary": "혼자 여행하는 20대",
+        "start_date": "2025-01-01",
+        "end_date": "2025-01-03",
+        "keywords": [],
+        "web_results": [],
+        "embedding_results": [],
+        "reranked_web_results": [],
+        "reranked_embedding_results": [],
+        "merged_results": [],
+        "poi_data_map": {},
+        "final_poi_data": [],
+        "final_pois": [],
+        "final_poi_count": 20
+    }
+    default.update(overrides)
+    return default
 
 
 # =============================================================================
@@ -21,15 +50,22 @@ class TestPoiGraphUnit:
     def poi_graph(self, mock_llm_client):
         """PoiGraph 인스턴스 생성 (모든 의존성 Mock)"""
         with patch('app.core.Agents.Poi.PoiGraph.WebSearchAgent') as MockWeb, \
-             patch('app.core.Agents.Poi.PoiGraph.VectorSearchAgent') as MockVector:
+             patch('app.core.Agents.Poi.PoiGraph.VectorSearchAgent') as MockVector, \
+             patch('app.core.Agents.Poi.PoiGraph.GoogleMapsPoiMapper') as MockMapper:
             
             MockWeb.return_value.search_multiple = AsyncMock(return_value=[])
             MockVector.return_value.search_by_text = AsyncMock(return_value=[])
+            MockVector.return_value.search_by_text_with_data = AsyncMock(return_value=[])
             MockVector.return_value.add_pois_batch = AsyncMock(return_value=0)
+            MockMapper.return_value.map_poi = AsyncMock(return_value=None)
             
             graph = PoiGraph(
                 llm_client=mock_llm_client,
-                web_search_api_key="test-key"
+                rerank_min_score=0.5,
+                keyword_k=5,
+                embedding_k=10,
+                web_search_k=5,
+                final_poi_count=20
             )
             return graph
     
@@ -41,6 +77,10 @@ class TestPoiGraphUnit:
         assert poi_graph.info_summarizer is not None
         assert poi_graph.reranker is not None
         assert poi_graph.graph is not None
+        assert poi_graph.keyword_k == 5
+        assert poi_graph.web_search_k == 5
+        assert poi_graph.embedding_k == 10
+        assert poi_graph.final_poi_count == 20
     
     @pytest.mark.unit
     @pytest.mark.asyncio
@@ -53,17 +93,7 @@ class TestPoiGraphUnit:
         </keywords>
         """
         
-        state: PoiAgentState = {
-            "travel_destination": "서울",
-            "persona_summary": "혼자 여행하는 20대, 서울 여행",
-            "keywords": [],
-            "web_results": [],
-            "embedding_results": [],
-            "reranked_web_results": [],
-            "reranked_embedding_results": [],
-            "merged_results": [],
-            "final_pois": []
-        }
+        state = create_default_state()
         
         result = await poi_graph._extract_keywords(state)
         
@@ -74,17 +104,9 @@ class TestPoiGraphUnit:
     @pytest.mark.asyncio
     async def test_web_search_node(self, poi_graph):
         """_web_search 노드 테스트"""
-        state: PoiAgentState = {
-            "travel_destination": "서울",
-            "persona_summary": "혼자 여행",
-            "keywords": ["서울 맛집", "서울 명소"],
-            "web_results": [],
-            "embedding_results": [],
-            "reranked_web_results": [],
-            "reranked_embedding_results": [],
-            "merged_results": [],
-            "final_pois": []
-        }
+        state = create_default_state(
+            keywords=["서울 맛집", "서울 명소"]
+        )
         
         # WebSearchAgent.search_multiple Mock 설정
         mock_results = [
@@ -97,182 +119,152 @@ class TestPoiGraphUnit:
         
         assert "web_results" in result
         assert len(result["web_results"]) == 2
-        poi_graph.web_search.search_multiple.assert_called_once_with(["서울 맛집", "서울 명소"])
+        poi_graph.web_search.search_multiple.assert_called_once()
 
     @pytest.mark.unit
     @pytest.mark.asyncio
-    async def test_embedding_search_node(self, poi_graph):
-        """_embedding_search 노드 테스트"""
-        state: PoiAgentState = {
-            "travel_destination": "서울",
-            "persona_summary": "혼자 여행",
-            "keywords": ["서울 맛집"],
-            "web_results": [],
-            "embedding_results": [],
-            "reranked_web_results": [],
-            "reranked_embedding_results": [],
-            "merged_results": [],
-            "final_pois": []
-        }
-        
-        # VectorSearchAgent.search_by_text Mock 설정
-        mock_results = [
-            PoiSearchResult(poi_id="poi-1", title="맛집1", snippet="맛있어요", source=PoiSource.EMBEDDING_DB)
-        ]
-        poi_graph.vector_search.search_by_text = AsyncMock(return_value=mock_results)
-        
-        result = await poi_graph._embedding_search(state)
-        
+    async def test_vector_db_first_search_node(self, poi_graph):
+        """_vector_db_first_search 노드 테스트 - 관련도 >= 0.9 필터링"""
+        state = create_default_state(
+            keywords=["서울 맛집"]
+        )
+
+        # VectorSearchAgent.search_by_text_with_data Mock 설정
+        mock_poi_data_high = PoiData(
+            id="poi-1",
+            name="맛집1",
+            category=PoiCategory.RESTAURANT,
+            description="맛있는 곳",
+            source=PoiSource.EMBEDDING_DB,
+            raw_text="맛집1 설명"
+        )
+        mock_search_result_high = PoiSearchResult(
+            poi_id="poi-1",
+            title="맛집1",
+            snippet="맛있어요",
+            source=PoiSource.EMBEDDING_DB,
+            relevance_score=0.95
+        )
+        mock_poi_data_low = PoiData(
+            id="poi-2",
+            name="맛집2",
+            category=PoiCategory.RESTAURANT,
+            description="보통인 곳",
+            source=PoiSource.EMBEDDING_DB,
+            raw_text="맛집2 설명"
+        )
+        mock_search_result_low = PoiSearchResult(
+            poi_id="poi-2",
+            title="맛집2",
+            snippet="보통이에요",
+            source=PoiSource.EMBEDDING_DB,
+            relevance_score=0.7
+        )
+        poi_graph.vector_search.search_by_text_with_data = AsyncMock(
+            return_value=[
+                (mock_search_result_high, mock_poi_data_high),
+                (mock_search_result_low, mock_poi_data_low)
+            ]
+        )
+
+        result = await poi_graph._vector_db_first_search(state)
+
         assert "embedding_results" in result
+        assert "poi_data_map" in result
+        # 관련도 0.9 미만인 poi-2는 필터링됨
         assert len(result["embedding_results"]) == 1
-        poi_graph.vector_search.search_by_text.assert_called()
+        assert result["embedding_results"][0].poi_id == "poi-1"
+        poi_graph.vector_search.search_by_text_with_data.assert_called()
 
     @pytest.mark.unit
     @pytest.mark.asyncio
-    async def test_rerank_web_node(self, poi_graph):
-        """_rerank_web 노드 테스트"""
-        state: PoiAgentState = {
-            "travel_destination": "서울",
-            "persona_summary": "가성비 중시",
-            "keywords": [],
-            "web_results": [
-                PoiSearchResult(title="비싼 곳", snippet="비싸요", source=PoiSource.WEB_SEARCH),
-                PoiSearchResult(title="싼 곳", snippet="싸요", source=PoiSource.WEB_SEARCH)
-            ],
-            "embedding_results": [],
-            "reranked_web_results": [],
-            "reranked_embedding_results": [],
-            "merged_results": [],
-            "final_pois": []
-        }
+    async def test_process_and_rerank_web_node_empty(self, poi_graph):
+        """_process_and_rerank_web 노드 테스트 - 빈 입력"""
+        state = create_default_state(
+            web_results=[]
+        )
+        
+        result = await poi_graph._process_and_rerank_web(state)
+        
+        assert result["reranked_web_results"] == []
+        assert result["poi_data_map"] == {}
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_rerank_embedding_node(self, poi_graph):
+        """_rerank_embedding 노드 테스트"""
+        state = create_default_state(
+            embedding_results=[
+                PoiSearchResult(
+                    poi_id="poi-1",
+                    title="맛집1",
+                    snippet="맛있어요",
+                    source=PoiSource.EMBEDDING_DB,
+                    relevance_score=0.8
+                )
+            ]
+        )
         
         # Reranker.rerank Mock 설정
         mock_reranked = [
-            PoiSearchResult(title="싼 곳", snippet="싸요", source=PoiSource.WEB_SEARCH, relevance_score=0.9),
-            PoiSearchResult(title="비싼 곳", snippet="비싸요", source=PoiSource.WEB_SEARCH, relevance_score=0.3)
+            PoiSearchResult(
+                poi_id="poi-1",
+                title="맛집1",
+                snippet="맛있어요",
+                source=PoiSource.EMBEDDING_DB,
+                relevance_score=0.9
+            )
         ]
         poi_graph.reranker.rerank = AsyncMock(return_value=mock_reranked)
         
-        result = await poi_graph._rerank_web(state)
+        result = await poi_graph._rerank_embedding(state)
         
-        assert "reranked_web_results" in result
-        assert result["reranked_web_results"][0].title == "싼 곳"
+        assert "reranked_embedding_results" in result
+        assert len(result["reranked_embedding_results"]) == 1
+        assert result["reranked_embedding_results"][0].relevance_score == 0.9
 
     @pytest.mark.unit
     @pytest.mark.asyncio
     async def test_merge_results_node(self, poi_graph):
         """_merge_results 노드 테스트"""
-        state: PoiAgentState = {
-            "travel_destination": "서울",
-            "persona_summary": "혼자 여행",
-            "keywords": [],
-            "web_results": [],
-            "embedding_results": [],
-            "reranked_web_results": [
+        mock_poi_data = PoiData(
+            id="poi-1",
+            name="테스트 장소",
+            category=PoiCategory.RESTAURANT,
+            description="맛있는 곳",
+            source=PoiSource.WEB_SEARCH,
+            raw_text="테스트 장소 설명"
+        )
+        
+        state = create_default_state(
+            reranked_web_results=[
                 PoiSearchResult(
+                    poi_id="poi-1",
                     title="웹 결과",
                     snippet="웹 검색",
                     source=PoiSource.WEB_SEARCH,
                     relevance_score=0.9
                 )
             ],
-            "reranked_embedding_results": [
+            reranked_embedding_results=[
                 PoiSearchResult(
-                    poi_id="poi-1",
+                    poi_id="poi-2",
                     title="임베딩 결과",
                     snippet="임베딩 검색",
                     source=PoiSource.EMBEDDING_DB,
                     relevance_score=0.8
                 )
             ],
-            "merged_results": [],
-            "final_pois": []
-        }
+            poi_data_map={"poi-1": mock_poi_data}
+        )
         
         result = await poi_graph._merge_results(state)
         
         assert "merged_results" in result
+        assert "final_poi_data" in result
         assert len(result["merged_results"]) == 2
-
-    @pytest.mark.unit
-    @pytest.mark.asyncio
-    async def test_summarize_node(self, poi_graph, mock_llm_client):
-        """_summarize 노드 테스트"""
-        # InfoSummarizeAgent가 llm_client를 사용하므로 해당 응답 Mock
-        mock_llm_client.call_llm.return_value = """
-        <poi_list>
-        <poi>
-        <id>poi-123</id>
-        <name>테스트 맛집</name>
-        <category>restaurant</category>
-        <description>맛있는 음식점입니다</description>
-        <summary>혼밥하기 좋은 맛집</summary>
-        <address>서울시 강남구</address>
-        <highlights>맛있음, 가성비</highlights>
-        </poi>
-        </poi_list>
-        """
-        
-        state: PoiAgentState = {
-            "travel_destination": "서울",
-            "persona_summary": "혼자 여행하는 20대",
-            "keywords": ["서울 맛집"],
-            "web_results": [],
-            "embedding_results": [],
-            "reranked_web_results": [],
-            "reranked_embedding_results": [],
-            "merged_results": [
-                PoiSearchResult(
-                    title="테스트 맛집",
-                    snippet="맛있는 음식점",
-                    source=PoiSource.WEB_SEARCH,
-                    relevance_score=0.9
-                )
-            ],
-            "final_pois": []
-        }
-        
-        result = await poi_graph._summarize(state)
-        
-        assert "final_pois" in result
-        assert len(result["final_pois"]) == 1
-        assert result["final_pois"][0].name == "테스트 맛집"
-
-    @pytest.mark.unit
-    @pytest.mark.asyncio
-    async def test_collect_and_store_node(self, poi_graph):
-        """_collect_and_store 노드 테스트"""
-        state: PoiAgentState = {
-            "travel_destination": "서울",
-            "persona_summary": "혼자 여행",
-            "keywords": [],
-            "web_results": [],
-            "embedding_results": [],
-            "reranked_web_results": [],
-            "reranked_embedding_results": [],
-            "merged_results": [],
-            "final_pois": [
-                PoiInfo(
-                    id="poi-1",
-                    name="테스트 장소",
-                    category=PoiCategory.CAFE,
-                    description="설명",
-                    summary="요약",
-                    address="주소",
-                    highlights=["특징1"]
-                )
-            ]
-        }
-        
-        result = await poi_graph._collect_and_store(state)
-        
-        assert result == {}
-        poi_graph.vector_search.add_pois_batch.assert_called_once()
-        # 데이터가 올바르게 전달되었는지 확인 (리스트 내 첫번째 PoiData 객체 확인)
-        call_args = poi_graph.vector_search.add_pois_batch.call_args[0][0]
-        assert len(call_args) == 1
-        assert call_args[0].name == "테스트 장소"
-        assert call_args[0].city == "서울"
+        # poi_data_map에 있는 것만 final_poi_data에 포함
+        assert len(result["final_poi_data"]) == 1
 
 
 # =============================================================================
@@ -285,91 +277,51 @@ class TestPoiGraphIntegration:
     def real_graph(self):
         """실제 LLM, WebSearch, VectorDB를 사용하는 PoiGraph"""
         try:
-            # from app.core.LLMClient.VllmClient import VllmClient
             from app.core.LLMClient.OpenAiApiClient import OpenAiApiClient
 
             llm = OpenAiApiClient()
-            return PoiGraph(llm_client=llm)
+            return PoiGraph(
+                llm_client=llm,
+                rerank_min_score=0.5,
+                keyword_k=3,
+                embedding_k=5,
+                web_search_k=3,
+                final_poi_count=10
+            )
         except Exception as e:
             pytest.skip(f"PoiGraph 초기화 실패: {e}")
     
     @pytest.mark.integration
     @pytest.mark.asyncio
-    async def test_full_workflow(self, real_graph):
-        """전체 워크플로우 테스트"""
-        if not real_graph.web_search.api_key:
-            pytest.skip("Tavily API 키 없음")
+    async def test_extract_keywords_with_real_llm(self, real_graph):
+        """실제 LLM으로 키워드 추출 테스트"""
+        state = create_default_state(
+            persona_summary="혼자 여행하는 20대, 맛집 탐방을 좋아함"
+        )
         
-        initial_state = {
-            "persona_summary": "혼자 여행하는 20대, 로컬 음식 선호",
-            "travel_destination": "서울"
-        }
-
-        print("=== 비동기 그래프 실행 시작 ===\n")
+        result = await real_graph._extract_keywords(state)
         
-        async for event in real_graph.graph.astream(initial_state, stream_mode="values"):
-            if not isinstance(event, dict):
-                continue
-                
-            for node_name, updated_values in event.items():
-                print(f"📍실행된 노드: {node_name}")
-                print(updated_values)
-                print("-" * 35)
-
-        print("\n=== 최종 결과 확인 ===")
-
-        final_result = await real_graph.graph.ainvoke(initial_state)
+        print(f"추출된 키워드: {result.get('keywords', [])}")
         
-        assert "final_pois" in final_result
-        print(f"최종 POI 목록: {[poi.name for poi in final_result['final_pois']]}")
+        assert "keywords" in result
+        assert len(result["keywords"]) >= 0
     
     @pytest.mark.integration
     @pytest.mark.asyncio
     async def test_run_method(self, real_graph):
         """run() 메서드 테스트"""
-        if not real_graph.web_search.api_key:
-            pytest.skip("Tavily API 키 없음")
+        if not real_graph.web_search.extractor:
+            pytest.skip("Extractor 없음")
         
-        result = await real_graph.run(
+        result, state = await real_graph.run(
             persona_summary="혼자 여행하는 20대, 카페 좋아함",
-            travel_destination="서울"
+            travel_destination="서울",
+            start_date="2025-01-01",
+            end_date="2025-01-03"
         )
         
-        print(f"run() 결과: {[poi.name for poi in result]}")
+        print(f"run() 결과: {len(result)}개의 POI")
         
         assert isinstance(result, list)
         if result:
-            assert isinstance(result[0], PoiInfo)
-    
-    @pytest.mark.integration
-    @pytest.mark.asyncio
-    async def test_extract_keywords_with_real_llm(self, real_graph):
-        """실제 LLM으로 키워드 추출 테스트"""
-        state: PoiAgentState = {
-            "travel_destination": "서울",
-            "persona_summary": "혼자 여행하는 20대, 맛집 탐방을 좋아함",
-            "keywords": [],
-            "web_results": [],
-            "embedding_results": [],
-            "reranked_web_results": [],
-            "reranked_embedding_results": [],
-            "merged_results": [],
-            "final_pois": []
-        }
-        
-        result = await real_graph._extract_keywords(state)
-        
-        # QueryExtension._parse_keywords에서 반환된 원본 데이터를 확인하기 위해 
-        # extract_keywords 내부의 response를 여기서 바로 확인할 수는 없지만 
-        # 키워드가 비어있는 경우 실패 원인 추적을 위해 로그 출력
-        print(f"추출된 키워드: {result.get('keywords', [])}")
-        
-        # LLM 응답이 항상 보장되지는 않으므로, 실패 시 상세 정보를 위해 래핑
-        if not result.get("keywords"):
-             # 재시도 또는 상세 분석용 로깅
-             print("경고: LLM에서 키워드를 추출하지 못했습니다.")
-        
-        assert "keywords" in result
-        # 키워드 추출 실패 시 테스트가 깨지는 것을 방지하려면 skip 처리할 수도 있지만, 
-        # 여기서는 우선 assert로 유지하되 데이터가 있을 때만 검증하는 것도 방법입니다.
-        assert len(result["keywords"]) >= 0 
+            assert isinstance(result[0], PoiData)

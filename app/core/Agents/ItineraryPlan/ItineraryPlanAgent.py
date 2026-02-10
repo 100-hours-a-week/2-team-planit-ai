@@ -102,6 +102,8 @@ class ItineraryPlanAgent:
             MessageData(role="user", content=user_prompt)
         ])
 
+        logger.info("프롬프트 내용: %s", chat_message.content)
+
         # LLM 호출 (LangChain Structured Output)
         logger.info("LLM 호출 시작")
         try:
@@ -115,6 +117,8 @@ class ItineraryPlanAgent:
 
         logger.info("LLM 호출 완료: day_plans 수=%d, reasoning 길이=%d자",
                      len(result.day_plans), len(result.reasoning))
+        
+        logger.info("LLM 결과: %s", result.model_dump())
 
         # 결과를 Itinerary로 변환
         return self._convert_to_itineraries(result, pois)
@@ -130,9 +134,9 @@ class ItineraryPlanAgent:
     ) -> str:
         """프롬프트 생성"""
         poi_info = "\n".join([
-            f"- ID: {poi.id}, 이름: {poi.name}, 카테고리: {poi.category.value}, "
-            f"설명: {poi.description[:50] if poi.description else '정보 없음'}, "
-            f"주소: {poi.address or '정보 없음'}"
+            f"<ID>{poi.id}</ID> <name>{poi.name}</name> <category>{poi.types}</category> "
+            f"<description>{poi.description[:50] if poi.description else '정보 없음'}</description>"
+            f"<address>{poi.address or '정보 없음'}</address>"
             for poi in pois
         ])
         

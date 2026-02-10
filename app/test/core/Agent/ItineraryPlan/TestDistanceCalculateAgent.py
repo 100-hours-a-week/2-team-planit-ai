@@ -1,5 +1,5 @@
 """
-DistanceCalculateAgent 테스트 (Mock 사용)
+DistanceCalculateAgent 테스트 (Mock 사용, SQLite 캐시)
 """
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
@@ -13,14 +13,16 @@ class TestDistanceCalculateAgent:
     """DistanceCalculateAgent 테스트"""
 
     @pytest.fixture
-    def agent(self):
-        """테스트용 에이전트 (API 키 없음)"""
-        return DistanceCalculateAgent(api_key=None)
+    def agent(self, tmp_path):
+        """테스트용 에이전트 (API 키 없음, 임시 DB)"""
+        db_path = str(tmp_path / "test_transfer.db")
+        return DistanceCalculateAgent(api_key=None, db_path=db_path)
 
     @pytest.fixture
-    def agent_with_key(self):
-        """테스트용 에이전트 (API 키 있음)"""
-        return DistanceCalculateAgent(api_key="test_api_key")
+    def agent_with_key(self, tmp_path):
+        """테스트용 에이전트 (API 키 있음, 임시 DB)"""
+        db_path = str(tmp_path / "test_transfer_key.db")
+        return DistanceCalculateAgent(api_key="test_api_key", db_path=db_path)
 
     @pytest.fixture
     def sample_poi_1(self):
@@ -60,12 +62,8 @@ class TestDistanceCalculateAgent:
 
     # === 캐시 테스트 ===
 
-    def test_cache_key_generation(self, agent):
-        """캐시 키 생성 테스트"""
-        key = agent._get_cache_key("poi_1", "poi_2", TravelMode.WALKING)
-        assert key == "poi_1|poi_2|walking"
-
-    def test_cache_save_and_get(self, agent, sample_poi_1, sample_poi_2):
+    @pytest.mark.asyncio
+    async def test_cache_save_and_get(self, agent, sample_poi_1, sample_poi_2):
         """캐시 저장 및 조회 테스트"""
         transfer = Transfer(
             from_poi_id=sample_poi_1.id,
@@ -76,10 +74,10 @@ class TestDistanceCalculateAgent:
         )
 
         # 캐시에 저장
-        agent._save_to_cache(transfer)
+        await agent._cache.put(transfer)
 
         # 캐시에서 조회
-        cached = agent._get_from_cache(
+        cached = await agent._cache.get(
             sample_poi_1.id,
             sample_poi_2.id,
             TravelMode.WALKING
@@ -89,12 +87,14 @@ class TestDistanceCalculateAgent:
         assert cached.duration_minutes == 20
         assert cached.distance_km == 1.5
 
-    def test_cache_miss(self, agent):
+    @pytest.mark.asyncio
+    async def test_cache_miss(self, agent):
         """캐시 미스 테스트"""
-        cached = agent._get_from_cache("poi_x", "poi_y", TravelMode.WALKING)
+        cached = await agent._cache.get("poi_x", "poi_y", TravelMode.WALKING)
         assert cached is None
 
-    def test_clear_cache(self, agent, sample_poi_1, sample_poi_2):
+    @pytest.mark.asyncio
+    async def test_clear_cache(self, agent, sample_poi_1, sample_poi_2):
         """캐시 초기화 테스트"""
         transfer = Transfer(
             from_poi_id=sample_poi_1.id,
@@ -103,14 +103,14 @@ class TestDistanceCalculateAgent:
             duration_minutes=20,
             distance_km=1.5
         )
-        agent._save_to_cache(transfer)
+        await agent._cache.put(transfer)
 
         # 캐시 크기 확인
-        assert agent.get_cache_size() == 1
+        assert await agent.get_cache_size() == 1
 
         # 캐시 초기화
-        agent.clear_cache()
-        assert agent.get_cache_size() == 0
+        await agent.clear_cache()
+        assert await agent.get_cache_size() == 0
 
     # === calculate 메서드 테스트 ===
 
@@ -135,7 +135,7 @@ class TestDistanceCalculateAgent:
             duration_minutes=25,
             distance_km=2.0
         )
-        agent._save_to_cache(cached_transfer)
+        await agent._cache.put(cached_transfer)
 
         # calculate 호출 - 캐시에서 가져와야 함
         result = await agent.calculate(sample_poi_1, sample_poi_2)

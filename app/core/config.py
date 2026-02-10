@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     tavily_api_key: Optional[str]
     langextract_api_key: Optional[str]
 
+    # Vector DB Settings
+    # vector_db_path: str
+
     @model_validator(mode='after')
     def validate_llm_settings(self) -> 'Settings':
         # 1. gpt-5 이상이거나 o1 모델인 경우 temperature를 사용하지 않음 (None 설정)

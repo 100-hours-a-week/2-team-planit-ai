@@ -1,4 +1,4 @@
-from typing import List, Dict, Optional, TypedDict
+from typing import List, Optional, TypedDict
 from langgraph.graph import StateGraph, END
 from app.core.models.PersonaAgentDataclass.persona import QAItem, Persona
 from app.core.models.LlmClientDataclass.ChatMessageDataclass import ChatMessage, MessageData
@@ -52,7 +52,7 @@ class TravelPersonaAgent:
             qa_answers=qa_items_to_qa_answers(state["qa_items"]),
         )
 
-        logger.info(user_prompt)
+        logger.info("유저 페르소나 에이전트 질문 생성")
 
         messages = ChatMessage(content=[
             MessageData(role="system", content=self.system_prompt),
@@ -67,8 +67,13 @@ class TravelPersonaAgent:
         """
         수집된 정보들을 바탕으로 최종 페르소나를 생성하는 단계
         """
+
+        logger.info("유저 페르소나 에이전트 최종 페르소나 생성 LLM 요청")
         response = await self.llm.call_llm(state["messages"])
         
+        logger.info("유저 페르소나 에이전트 최종 페르소나 생성 LLM 응답")
+        logger.info(response)
+
         answer = response.split("<final_response>")[1].split("</final_response>")[0]
         
         return {

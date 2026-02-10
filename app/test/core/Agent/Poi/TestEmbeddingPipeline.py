@@ -1,6 +1,10 @@
 import pytest
 from app.core.Agents.Poi.VectorDB.EmbeddingPipeline.EmbeddingPipeline import EmbeddingPipeline
-from app.core.Agents.Poi.VectorDB.EmbeddingPipeline.BaseEmbeddingPipeline import BaseEmbeddingPipeline
+from app.core.Agents.Poi.VectorDB.EmbeddingPipeline.BaseEmbeddingPipeline import (
+    BaseEmbeddingPipeline,
+    EmbeddingTaskType,
+)
+from app.core.models.PoiAgentDataclass.poi import PoiData, PoiCategory, PoiSource
 
 
 # =============================================================================
@@ -31,9 +35,13 @@ class TestEmbeddingPipelineUnit:
     async def test_embed_documents_returns_list_of_lists(self):
         """embed_documents가 리스트의 리스트를 반환하는지 확인"""
         pipeline = EmbeddingPipeline()
-        documents = ["문서 1", "문서 2", "문서 3"]
+        documents = [
+            PoiData(id=f"doc-{i}", name=f"문서 {i}", category=PoiCategory.RESTAURANT,
+                    description=f"설명 {i}", source=PoiSource.WEB_SEARCH, raw_text=f"문서 {i}")
+            for i in range(1, 4)
+        ]
         result = await pipeline.embed_documents(documents)
-        
+
         assert isinstance(result, list)
         assert len(result) == 3
         for embedding in result:
@@ -107,16 +115,20 @@ class TestEmbeddingPipelineIntegration:
     @pytest.mark.asyncio
     async def test_embed_documents_batch_consistency(self, pipeline):
         """배치 임베딩과 일반 임베딩 결과 일관성 확인"""
-        documents = [f"문서 {i}" for i in range(100)]
-        
+        documents = [
+            PoiData(id=f"doc-{i}", name=f"문서 {i}", category=PoiCategory.RESTAURANT,
+                    description=f"설명 {i}", source=PoiSource.WEB_SEARCH, raw_text=f"문서 {i}")
+            for i in range(100)
+        ]
+
         # 일반 임베딩
         normal_result = await pipeline.embed_documents(documents)
-        
+
         # 배치 임베딩 (작은 배치 크기)
         batch_result = await pipeline.embed_documents_batch(documents, batch_size=3)
-        
+
         assert len(normal_result) == len(batch_result)
-        
+
         # 각 문서의 임베딩 차원이 동일한지 확인
         for i in range(len(documents)):
             assert len(normal_result[i]) == len(batch_result[i])
@@ -125,10 +137,15 @@ class TestEmbeddingPipelineIntegration:
     @pytest.mark.asyncio
     async def test_embed_documents_batch_large_dataset(self, pipeline):
         """대량 문서 배치 처리 테스트"""
-        documents = [f"테스트 문서 {i}. 이것은 테스트용 텍스트입니다." for i in range(250)]
-        
+        documents = [
+            PoiData(id=f"doc-{i}", name=f"테스트 문서 {i}", category=PoiCategory.RESTAURANT,
+                    description=f"설명 {i}", source=PoiSource.WEB_SEARCH,
+                    raw_text=f"테스트 문서 {i}. 이것은 테스트용 텍스트입니다.")
+            for i in range(250)
+        ]
+
         result = await pipeline.embed_documents_batch(documents, batch_size=50)
-        
+
         assert len(result) == 250
         assert all(len(emb) > 0 for emb in result)
     
@@ -147,7 +164,102 @@ class TestEmbeddingPipelineIntegration:
         result = asyncio.get_event_loop().run_until_complete(
             pipeline.embed_query("테스트")
         )
-        
+
         # all-MiniLM-L6-v2 모델은 384차원
         assert len(result) == 384
+
+
+# =============================================================================
+# embed() 메서드 및 EmbeddingTaskType 테스트
+# =============================================================================
+class TestEmbedMethodUnit:
+    """embed() 통합 메서드 및 task_type 분기 테스트"""
+
+    @pytest.mark.unit
+    def test_embedding_task_type_values(self):
+        """EmbeddingTaskType enum 값 확인"""
+        assert EmbeddingTaskType.QUERY == "query"
+        assert EmbeddingTaskType.DOCUMENT == "document"
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_embed_query_type(self):
+        """embed()에 QUERY 타입으로 호출"""
+        pipeline = EmbeddingPipeline()
+        result = await pipeline.embed(["테스트 쿼리"], EmbeddingTaskType.QUERY)
+
+        assert isinstance(result, list)
+        assert len(result) == 1
+        assert len(result[0]) > 0
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_embed_document_type(self):
+        """embed()에 DOCUMENT 타입으로 호출"""
+        pipeline = EmbeddingPipeline()
+        result = await pipeline.embed(["문서 텍스트"], EmbeddingTaskType.DOCUMENT)
+
+        assert isinstance(result, list)
+        assert len(result) == 1
+        assert len(result[0]) > 0
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_embed_empty_list(self):
+        """빈 텍스트 리스트 처리"""
+        pipeline = EmbeddingPipeline()
+        result = await pipeline.embed([], EmbeddingTaskType.QUERY)
+
+        assert result == []
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_embed_default_task_type(self):
+        """task_type 기본값이 QUERY인지 확인"""
+        pipeline = EmbeddingPipeline()
+        result_default = await pipeline.embed(["테스트"])
+        result_query = await pipeline.embed(["테스트"], EmbeddingTaskType.QUERY)
+
+        assert result_default == result_query
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_task_prefixes_applied(self):
+        """task_prefixes가 텍스트에 적용되는지 확인"""
+        pipeline_no_prefix = EmbeddingPipeline()
+        pipeline_with_prefix = EmbeddingPipeline(
+            task_prefixes={"query": "query: ", "document": "passage: "}
+        )
+
+        # prefix가 있으면 다른 임베딩이 생성되어야 함
+        result_no = await pipeline_no_prefix.embed(["테스트"], EmbeddingTaskType.QUERY)
+        result_with = await pipeline_with_prefix.embed(["테스트"], EmbeddingTaskType.QUERY)
+
+        # 같은 텍스트지만 prefix 유무로 임베딩이 달라야 함
+        assert result_no != result_with
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_no_prefix_when_empty_dict(self):
+        """task_prefixes가 빈 dict일 때 prefix 없이 동작"""
+        pipeline_default = EmbeddingPipeline()
+        pipeline_empty = EmbeddingPipeline(task_prefixes={})
+
+        result_default = await pipeline_default.embed(["테스트"], EmbeddingTaskType.QUERY)
+        result_empty = await pipeline_empty.embed(["테스트"], EmbeddingTaskType.QUERY)
+
+        assert result_default == result_empty
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_embed_multiple_texts(self):
+        """여러 텍스트 동시 임베딩"""
+        pipeline = EmbeddingPipeline()
+        texts = ["텍스트 1", "텍스트 2", "텍스트 3"]
+        result = await pipeline.embed(texts, EmbeddingTaskType.DOCUMENT)
+
+        assert len(result) == 3
+        for emb in result:
+            assert isinstance(emb, list)
+            assert len(emb) > 0
 

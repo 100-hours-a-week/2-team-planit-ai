@@ -30,3 +30,11 @@ test.json
 modern*.json
 *.log
 logs/
+
+results/
+
+*.ipynb
+
+config/
+
+data/

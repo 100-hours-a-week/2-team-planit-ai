@@ -24,6 +24,10 @@ dependencies = [
     "uvicorn>=0.40.0",
     "uvloop>=0.22.1",
     "langextract>=0.1.0",
+    "pillow>=12.1.0",
+    "peft>=0.18.1",
+    "torchvision>=0.25.0",
+    "einops>=0.8.2",
 ]
 
 [tool.pytest.ini_options]

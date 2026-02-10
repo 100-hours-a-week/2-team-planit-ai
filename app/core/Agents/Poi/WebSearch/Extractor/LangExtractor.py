@@ -1,3 +1,6 @@
+import logging
+logger = logging.getLogger(__name__)
+
 import textwrap
 from typing import List, Optional
 
@@ -314,12 +317,13 @@ class LangExtractor(BaseExtractor):
             }
             
             result = lx.extract(**extract_kwargs)
-            print(result)
+            
+            # print(result)
 
             return self._convert_to_poi_results(result, url)
 
         except Exception as e:
-            print(f"LangExtractor error: {e}")
+            logger.error(f"LangExtractor error: {e}")
             return []
 
     def _convert_to_poi_results(
