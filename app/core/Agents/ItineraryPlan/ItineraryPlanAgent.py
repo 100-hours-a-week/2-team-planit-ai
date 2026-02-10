@@ -44,15 +44,14 @@ class ItineraryPlanAgent:
 주어진 POI 목록을 여행 기간 내에 적절히 배치하여 최적의 일정을 만들어주세요.
 
 규칙:
-1. 각 날짜에 4-5개의 POI를 배치하세요 (너무 많거나 적지 않게)
+1. 각 날짜에 1-10개의 POI를 배치하세요. (장소의 체류 시간을 고려하여 너무 많거나 적지 않게)
 2. 비슷한 위치의 POI는 같은 날에 배치하세요
 3. 식당/카페는 적절한 시간대에 배치하세요 (점심 11:30-13:00, 저녁 17:30-19:00)
-4. 모든 POI를 빠짐없이 일정에 포함하세요
-5. 피드백이 있다면 반드시 반영하세요
-6. 각 POI에 시작 시간(HH:MM)과 체류 시간(분)을 배정하세요
-7. 하루 일정은 09:00~21:00 사이로 계획하세요
-8. POI 간 이동 시간 30분을 고려하여 시간을 배정하세요
-9. 체류 시간은 장소 특성에 맞게 자유롭게 결정하세요 (예: 관광지 60-120분, 카페 30-60분, 식당 60-90분)"""
+4. 피드백이 있다면 반드시 반영하세요
+5. 각 POI에 시작 시간(HH:MM)과 체류 시간(분)을 배정하세요
+6. 하루 일정은 09:00~21:00 사이로 계획하세요. 단 여행의 시작일({travel_start_date} {travel_start_time})과 종료일({travel_end_date} {travel_end_time})은 해당 시간에 맞게 조정하세요.
+7. POI 간 이동 시간 30분을 고려하여 시간을 배정하세요
+8. 체류 시간은 장소 특성에 맞게 자유롭게 결정하세요"""
 
     def __init__(self, llm_client: LangchainClient):
         """
@@ -67,6 +66,8 @@ class ItineraryPlanAgent:
         travel_destination: str,
         travel_start_date: str,
         travel_end_date: str,
+        travel_start_time: str,
+        travel_end_time: str,
         persona_summary: str,
         feedback: Optional[str] = None
     ) -> List[Itinerary]:
@@ -98,7 +99,12 @@ class ItineraryPlanAgent:
         logger.info("프롬프트 생성 완료: 길이=%d자", len(user_prompt))
 
         chat_message = ChatMessage(content=[
-            MessageData(role="system", content=self.SYSTEM_PROMPT),
+            MessageData(role="system", content=self.SYSTEM_PROMPT.format(
+                travel_start_date=travel_start_date,
+                travel_end_date=travel_end_date,
+                travel_start_time=travel_start_time,
+                travel_end_time=travel_end_time
+            )),
             MessageData(role="user", content=user_prompt)
         ])
 
@@ -216,6 +222,8 @@ class ItineraryPlanAgent:
         travel_destination: str,
         travel_start_date: str,
         travel_end_date: str,
+        travel_start_time: str,
+        travel_end_time: str,
         persona_summary: str,
         feedback: str
     ) -> List[Itinerary]:
@@ -230,6 +238,8 @@ class ItineraryPlanAgent:
             travel_destination=travel_destination,
             travel_start_date=travel_start_date,
             travel_end_date=travel_end_date,
+            travel_start_time=travel_start_time,
+            travel_end_time=travel_end_time,
             persona_summary=persona_summary,
             feedback=feedback
         )

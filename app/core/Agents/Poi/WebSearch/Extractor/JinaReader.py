@@ -57,5 +57,5 @@ class JinaReader:
                 response.raise_for_status()
                 return response.json()
         except Exception as e:
-            logger.error(f"JinaReader error for {url}: {e}")
+            logger.warning(f"JinaReader failed for {url}: {e}")
             return None
