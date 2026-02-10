@@ -443,11 +443,11 @@ class PoiGraph:
     async def _vector_db_first_search(self, state: PoiAgentState) -> dict:
         """VectorDB 우선 조회 노드
 
-        VectorDB에서 관련도 0.9 이상인 결과만 필터링하여 반환.
+        VectorDB에서 관련도 0.55 이상인 결과만 필터링하여 반환.
         travel_destination이 있으면 해당 도시로 필터링하여 검색.
         metadata에서 PoiData를 복원하여 poi_data_map에 추가.
         """
-        RELEVANCE_THRESHOLD = 0.75
+        RELEVANCE_THRESHOLD = 0.3
 
         keywords = state.get("keywords", [])
         travel_destination = state.get("travel_destination", "")
@@ -455,13 +455,12 @@ class PoiGraph:
         logger.info(f"VectorDB 우선 조회 시작: {len(keywords)}개 키워드 사용")
 
         all_pairs: list = []
-        for keyword in keywords[:self.keyword_k]:
-            pairs = await self.vector_search.search_by_text_with_data(
-                query=keyword,
-                k=self.embedding_k,
-                city_filter=travel_destination
-            )
-            all_pairs.extend(pairs)
+        pairs = await self.vector_search.search_by_text_with_data(
+            query=state.get("persona_summary", ", ".join(keywords)),
+            k=self.embedding_k,
+            city_filter=travel_destination
+        )
+        all_pairs.extend(pairs)
 
         # 중복 제거 (poi_id 기준) + 관련도 threshold 필터링
         seen_ids: set = set()
@@ -475,6 +474,9 @@ class PoiGraph:
                     embedding_poi_data_map[search_result.poi_id] = poi_data
 
         logger.info(f"VectorDB 우선 조회: {len(filtered_results)}개 (관련도 >= {RELEVANCE_THRESHOLD})")
+
+        for poi in filtered_results:
+            logger.info(f"VectorDB 우선 조회: {poi.title} ({poi.relevance_score})")
         
         # 통계 수집: 임베딩 검색 POI 개수
         if self._stats is not None:

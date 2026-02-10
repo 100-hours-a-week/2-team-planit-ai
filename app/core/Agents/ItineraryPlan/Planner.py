@@ -184,6 +184,8 @@ class Planner:
             travel_destination=state.get("travel_destination", ""),
             travel_start_date=state.get("travel_start_date", ""),
             travel_end_date=state.get("travel_end_date", ""),
+            travel_start_time=state.get("travel_start_time", ""),
+            travel_end_time=state.get("travel_end_time", ""),
             persona_summary=state.get("persona_summary", ""),
             feedback=feedback
         )
