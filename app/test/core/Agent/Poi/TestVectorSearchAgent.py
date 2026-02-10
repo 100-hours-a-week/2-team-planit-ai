@@ -78,7 +78,7 @@ class TestVectorSearchAgentUnit:
         agent._collection = mock_collection
         
         # 쿼리 실행
-        results = await agent.search_by_text("맛집 추천", k=2)
+        results = await agent.search_by_text("맛집 추천", k=2, city_filter="서울")
         
         # 검증: 결과 개수
         assert len(results) == 2
@@ -106,7 +106,7 @@ class TestVectorSearchAgentUnit:
         agent._initialized = True
         agent._collection = mock_collection
         
-        results = await agent.search_by_text("맛집", k=5)
+        results = await agent.search_by_text("맛집", k=5, city_filter="서울")
         
         for result in results:
             assert result.source == PoiSource.EMBEDDING_DB
@@ -144,6 +144,22 @@ class TestVectorSearchAgentUnit:
             "address": "",
             "source": "web_search",
             "source_url": "",
+            # Google Maps 필드
+            "google_place_id": "",
+            "latitude": "",
+            "longitude": "",
+            "google_maps_uri": "",
+            "types": "[]",
+            "primary_type": "",
+            # 상세 정보
+            "google_rating": "",
+            "user_rating_count": "",
+            "price_level": "",
+            "price_range": "",
+            "website_uri": "",
+            "phone_number": "",
+            # 영업시간
+            "opening_hours": "",
         }]
 
     @pytest.mark.unit

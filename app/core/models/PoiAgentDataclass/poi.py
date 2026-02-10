@@ -126,6 +126,11 @@ class PoiData(BaseModel):
     # 영업시간
     opening_hours: Optional[OpeningHours] = Field(None, description="영업시간")
 
+    # Summary 필드 (Google Places API)
+    editorial_summary: Optional[str] = Field(None, description="편집자 요약 (Google 제공)")
+    generative_summary: Optional[str] = Field(None, description="AI 생성 요약")
+    review_summary: Optional[str] = Field(None, description="리뷰 요약")
+
 
 class PoiSearchResult(BaseModel):
     """검색 결과 (웹/임베딩 통합)"""
@@ -173,6 +178,7 @@ class PoiAgentState(TypedDict):
     final_poi_data: List[PoiData]  # 최종 반환용 PoiData 리스트
     final_pois: List[PoiInfo]
     final_poi_count: int
+    travel_days: int
 
 def _convert_poi_info_to_data(poi_info: PoiInfo, travel_destination: str) -> PoiData:
     """
@@ -205,3 +211,56 @@ def _convert_poi_info_to_data(poi_info: PoiInfo, travel_destination: str) -> Poi
         source_url=None,
         raw_text=raw_text
     )
+
+
+class PagePoiStats(TypedDict):
+    """웹 페이지별 POI 추출 통계"""
+    url: str
+    status: str         # "success" | "cache" | "jina_failed" | "empty"
+    raw_count: int      # 원본 추출 개수 (success만)
+    dup_count: int      # 중복 제거된 개수
+    final_count: int    # 최종 개수
+
+
+class PoiSearchStats(TypedDict, total=False):
+    """POI 검색 통계 보고서용 데이터 구조"""
+    
+    # [0] VectorDB (임베딩) 검색
+    embedding_poi_count: int
+    
+    # [1] 웹 검색 키워드
+    keywords: List[str]
+    keyword_count: int
+    
+    # [2] 키워드별 검색된 웹 페이지 수
+    pages_per_keyword: Dict[str, int]
+    
+    # [3] 캐시 처리 통계
+    cache_hit_pages: int
+    total_pages: int
+    
+    # [4] 웹 페이지별 POI 추출 통계
+    pages_poi_stats: List[PagePoiStats]
+    
+    # [5] 전체 POI 통계 (웹 검색)
+    web_raw_poi_count: int
+    web_dup_removed: int
+    web_final_poi_count: int
+    
+    # [6] VectorDB 히트 vs Mapper 처리
+    vectordb_hit_count: int      # VectorDB에서 찾아서 Mapper 스킵
+    mapper_processed_count: int  # Mapper로 실제 처리
+    
+    # [7] 조기 종료 통계
+    early_termination_checked: int   # 조기 종료 전까지 검사한 POI
+    early_termination_skipped: int   # 조기 종료로 스킵된 POI
+    
+    # [7-1] POI 처리 실패 통계
+    summarize_failed_count: int      # 요약 실패
+    mapper_failed_count: int         # Google Maps 검증 실패
+    other_error_count: int           # 기타 오류
+    
+    # [8] 병합 통계
+    pre_merge_web_count: int
+    pre_merge_embedding_count: int
+    post_merge_count: int

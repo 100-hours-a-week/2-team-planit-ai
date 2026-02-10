@@ -89,6 +89,9 @@ class GoogleMapsPoiMapper(BasePoiMapper):
         "places.websiteUri",
         "places.internationalPhoneNumber",
         "places.regularOpeningHours",
+        "places.editorialSummary",
+        "places.generativeSummary",
+        "places.reviews",
     ])
     
     # 도시 좌표 기반 locationBias 반경 (미터)
@@ -269,7 +272,7 @@ class GoogleMapsPoiMapper(BasePoiMapper):
                     raise PoiValidationError(error_msg)
                 return None
 
-            # PoiData로 변환 (source_url이 있으면 URL 기반 poi_id 사용)
+            # PoiData로 변환
             poi_data = self._convert_to_poi_data(poi_info, place_data, city, source_url)
             return poi_data
 
@@ -430,11 +433,16 @@ class GoogleMapsPoiMapper(BasePoiMapper):
         # 임베딩용 텍스트 생성
         raw_text = self._build_raw_text(poi_info, place_data)
 
-        # poi_id 결정: source_url이 있으면 URL 기반, 없으면 기존 id 사용
-        poi_id = self.generate_poi_id(place_data.get("googleMapsUri"))
+        # poi_id 결정: 구글 Places ID 사용
+        poi_id = place_data.get("id")
 
         # source_url 결정: 제공된 source_url 또는 Google Maps URI
         final_source_url = source_url or place_data.get("googleMapsUri")
+
+        # Summary 필드 파싱
+        editorial_summary = self._extract_summary_text(place_data.get("editorialSummary"))
+        generative_summary = self._extract_summary_text(place_data.get("generativeSummary"))
+        review_summary = self._extract_review_summary(place_data.get("reviews"))
 
         return PoiData(
             id=poi_id,
@@ -461,6 +469,10 @@ class GoogleMapsPoiMapper(BasePoiMapper):
             website_uri=place_data.get("websiteUri"),
             phone_number=place_data.get("internationalPhoneNumber"),
             opening_hours=opening_hours,
+            # Summary 필드
+            editorial_summary=editorial_summary,
+            generative_summary=generative_summary,
+            review_summary=review_summary,
         )
     
     def _map_category(self, primary_type: str, types: List[str]) -> PoiCategory:
@@ -595,15 +607,38 @@ class GoogleMapsPoiMapper(BasePoiMapper):
     def _build_raw_text(self, poi_info: PoiInfo, place_data: dict) -> str:
         """임베딩용 텍스트 생성"""
         parts = [place_data.get("displayName", {}).get("text", poi_info.name)]
-        
+
         if poi_info.description:
             parts.append(poi_info.description)
-        
+
         address = place_data.get("formattedAddress")
         if address:
             parts.append(f"위치: {address}")
-        
+
         if poi_info.highlights:
             parts.append(f"특징: {', '.join(poi_info.highlights)}")
-        
+
         return ". ".join(parts)
+
+    def _extract_summary_text(self, summary_data: Optional[dict]) -> Optional[str]:
+        """editorialSummary, generativeSummary에서 텍스트 추출"""
+        if not summary_data:
+            return None
+        # Google API 응답: {"text": "...", "languageCode": "ko"} 또는 {"overview": {"text": "..."}}
+        if "text" in summary_data:
+            return summary_data.get("text")
+        if "overview" in summary_data:
+            return summary_data.get("overview", {}).get("text")
+        return None
+
+    def _extract_review_summary(self, reviews: Optional[List[dict]]) -> Optional[str]:
+        """reviews 배열에서 상위 리뷰 요약 생성"""
+        if not reviews:
+            return None
+        # 상위 3개 리뷰 텍스트 결합
+        summaries = []
+        for review in reviews[:3]:
+            text = review.get("text", {}).get("text") if isinstance(review.get("text"), dict) else review.get("text")
+            if text:
+                summaries.append(text[:200])  # 각 리뷰 200자 제한
+        return " | ".join(summaries) if summaries else None

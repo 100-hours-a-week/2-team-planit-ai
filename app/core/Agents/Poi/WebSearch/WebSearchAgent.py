@@ -7,7 +7,7 @@ from tavily import TavilyClient
 from app.core.Agents.Poi.WebSearch.BaseWebSearchAgent import BaseWebSearchAgent
 from app.core.Agents.Poi.WebSearch.Extractor import LangExtractor, JinaReader
 from app.core.Agents.Poi.WebSearch.UrlCache import UrlCache
-from app.core.models.PoiAgentDataclass.poi import PoiSearchResult, PoiSource
+from app.core.models.PoiAgentDataclass.poi import PoiSearchResult, PoiSource, PoiSearchStats, PagePoiStats
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -40,7 +40,12 @@ class WebSearchAgent(BaseWebSearchAgent):
         self.num_results = num_results
         self.url_cache = url_cache or UrlCache()
 
-    async def search(self, query: str, destination: str = "") -> List[PoiSearchResult]:
+    async def search(
+        self, 
+        query: str, 
+        destination: str = "",
+        stats: Optional[PoiSearchStats] = None
+    ) -> List[PoiSearchResult]:
         """
         단일 쿼리로 웹 검색 실행
 
@@ -50,6 +55,7 @@ class WebSearchAgent(BaseWebSearchAgent):
         Args:
             query: 검색 쿼리
             destination: 여행지 (캐시 인덱싱용)
+            stats: 통계 수집용 객체 (선택적)
         """
 
         if query is None or query == "":
@@ -64,6 +70,7 @@ class WebSearchAgent(BaseWebSearchAgent):
             )
 
             results = []
+            seen_titles: set = set()
             for item in response.get("results", []):
                 url = item.get("url")
 
@@ -73,6 +80,22 @@ class WebSearchAgent(BaseWebSearchAgent):
                     cached = self.url_cache.get(url, destination)
                     if cached is not None:
                         logger.info(f"URL 캐시 히트: {url}")
+                        # 통계 수집: 캐시 히트
+                        if stats is not None:
+                            stats["cache_hit_pages"] = stats.get("cache_hit_pages", 0) + 1
+                            # 캐시 히트 페이지도 통계에 기록
+                            page_stat: PagePoiStats = {
+                                "url": url,
+                                "status": "cache",
+                                "raw_count": len(cached),
+                                "dup_count": 0,
+                                "final_count": len(cached)
+                            }
+                            if "pages_poi_stats" not in stats:
+                                stats["pages_poi_stats"] = []
+                            stats["pages_poi_stats"].append(page_stat)
+                        for poi in cached:
+                            logger.info(f"추출된 POI: {poi.title}")
                         results.extend(cached)
                         continue
 
@@ -82,12 +105,62 @@ class WebSearchAgent(BaseWebSearchAgent):
                             raw_content=jina_text['data']['content'],
                             url=url,
                         )
-                        # 추출 결과를 캐시에 저장 (빈 결과도 저장하여 재시도 방지)
-                        self.url_cache.put(url, destination, extracted or [])
                         if extracted:
-                            results.extend(extracted)
+                            unique_extracted = []
+                            raw_count = len(extracted)
+                            for poi in extracted:
+                                normalized = poi.title.strip().lower()
+                                if normalized not in seen_titles:
+                                    seen_titles.add(normalized)
+                                    unique_extracted.append(poi)
+                                    logger.info(f"추출된 POI: {poi.title}")
+                                else:
+                                    logger.info(f"title 중복 제거: {poi.title}")
+                            # 통계 수집: 페이지별 POI 추출 통계
+                            if stats is not None:
+                                page_stat: PagePoiStats = {
+                                    "url": url,
+                                    "status": "success",
+                                    "raw_count": raw_count,
+                                    "dup_count": raw_count - len(unique_extracted),
+                                    "final_count": len(unique_extracted)
+                                }
+                                if "pages_poi_stats" not in stats:
+                                    stats["pages_poi_stats"] = []
+                                stats["pages_poi_stats"].append(page_stat)
+                            # 중복 제거된 결과를 캐시에 저장
+                            self.url_cache.put(url, destination, unique_extracted)
+                            results.extend(unique_extracted)
                             continue
-
+                        else:
+                            # 빈 결과: 통계에 기록
+                            if stats is not None:
+                                page_stat: PagePoiStats = {
+                                    "url": url,
+                                    "status": "empty",
+                                    "raw_count": 0,
+                                    "dup_count": 0,
+                                    "final_count": 0
+                                }
+                                if "pages_poi_stats" not in stats:
+                                    stats["pages_poi_stats"] = []
+                                stats["pages_poi_stats"].append(page_stat)
+                            # 빈 결과도 캐시에 저장하여 재시도 방지
+                            self.url_cache.put(url, destination, [])
+                    else:
+                        # Jina Reader 실패: 통계에 기록
+                        if stats is not None:
+                            page_stat: PagePoiStats = {
+                                "url": url,
+                                "status": "jina_failed",
+                                "raw_count": 0,
+                                "dup_count": 0,
+                                "final_count": 0
+                            }
+                            if "pages_poi_stats" not in stats:
+                                stats["pages_poi_stats"] = []
+                            stats["pages_poi_stats"].append(page_stat)
+                        
                 # 폴백: 기존 snippet 기반 로직
                 result = PoiSearchResult(
                     title=item.get("title", ""),
@@ -108,6 +181,7 @@ class WebSearchAgent(BaseWebSearchAgent):
         self,
         queries: List[str],
         destination: str = "",
+        stats: Optional[PoiSearchStats] = None
     ) -> List[PoiSearchResult]:
         """
         여러 쿼리로 병렬 검색 후 결과 병합
@@ -115,38 +189,37 @@ class WebSearchAgent(BaseWebSearchAgent):
         Args:
             queries: 검색 쿼리 리스트
             destination: 여행지 (캐시 인덱싱용)
+            stats: 통계 수집용 객체 (선택적)
         """
         if not queries:
             return []
 
+        # 통계: 키워드 목록 저장
+        if stats is not None:
+            stats["keywords"] = list(queries)
+            stats["keyword_count"] = len(queries)
+
         # 병렬 검색 실행
         tasks = [
-            self.search(query, destination=destination)
+            self.search(query, destination=destination, stats=stats)
             for query in queries
         ]
         results_list = await asyncio.gather(*tasks)
 
-        # 결과 병합 및 중복 제거
-        seen_urls = set()
-        # merged_results = []
+        # 통계: 키워드별 페이지 수, 전체 페이지 수
+        if stats is not None:
+            pages_per_keyword = {}
+            total_pages = 0
+            for i, query in enumerate(queries):
+                # 각 키워드 검색 결과에서 고유 URL 수 계산 (결과 기반 추정)
+                if i < len(results_list):
+                    page_count = len(set(r.url for r in results_list[i] if r.url))
+                    pages_per_keyword[query] = page_count
+                    total_pages += page_count
+            stats["pages_per_keyword"] = pages_per_keyword
+            stats["total_pages"] = total_pages
+
+        # 결과 병합
         merged_results = [result for results in results_list for result in results]
-        
-        # print(results_list)
-        # print(type(results_list))
-
-        # for results in results_list:
-        #     for result in results:
-        #         try:
-        #             if result.url and result.url not in seen_urls:
-        #                 seen_urls.add(result.url)
-        #                 merged_results.append(result)
-        #             elif not result.url:
-        #                 merged_results.append(result)
-        #         except Exception as e:
-        #             print(f"Error processing result: {e}")
-                
-
-        # 관련도 점수로 정렬
-        # merged_results.sort(key=lambda x: x.relevance_score, reverse=True)
 
         return merged_results

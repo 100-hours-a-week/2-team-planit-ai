@@ -19,7 +19,7 @@ class OpenAiApiClient(BaseLLMClient):
         model: Optional[str] = settings.openai_model,
         timeout: int = settings.llm_client_timeout,
         max_retries: int = settings.llm_client_max_retries,
-        max_tokens: int = settings.llm_client_max_tokens,
+        max_tokens: int = settings.vllm_client_max_tokens,
         temperature: float = settings.llm_client_temperature,
         top_p: float = settings.llm_client_top_p,
         api_key: Optional[str] = settings.openai_api_key,

@@ -1,3 +1,6 @@
+import logging
+logger = logging.getLogger(__name__)
+
 from typing import List
 from app.core.LLMClient.BaseLlmClient import BaseLLMClient
 from app.core.models.LlmClientDataclass.ChatMessageDataclass import ChatMessage, MessageData
@@ -35,66 +38,73 @@ class Reranker(BaseReranker):
     검색 결과를 페르소나 기반으로 리랭킹하는 모듈
     """
     
-    def __init__(self, llm_client: BaseLLMClient, top_n: int = 10):
+    def __init__(self, llm_client: BaseLLMClient, min_score: float = 0.5):
         """
         Args:
             llm_client: LLM 클라이언트
-            top_n: 리랭킹 후 반환할 상위 결과 수
+            min_score: 리랭킹 후 반환할 최소 점수 임계값
         """
         self.llm = llm_client
-        self.top_n = top_n
+        self.min_score = min_score
     
     async def rerank(
-        self, 
-        results: List[PoiSearchResult], 
-        persona_summary: str
+        self,
+        results: List[PoiSearchResult],
+        persona_summary: str,
+        dropped_out: list = None
     ) -> List[PoiSearchResult]:
         """
         검색 결과를 페르소나 기반으로 리랭킹
-        
+
         Args:
             results: 검색 결과 리스트
             persona_summary: 여행자 페르소나 요약
-            
+            dropped_out: 탈락 항목 수집용 리스트 (제공 시 (title, score) 튜플 추가)
+
         Returns:
-            리랭킹된 상위 n개 결과
+            리랭킹된 결과 (min_score 이상만 포함)
         """
         if not results:
             return []
 
         # 검색 결과를 텍스트로 변환
         results_text = self._format_results(results)
-        
+
         prompt = RERANK_PROMPT.format(
             persona=persona_summary,
             results=results_text
         )
-        
+
         messages = ChatMessage(content=[
             MessageData(role="user", content=prompt)
         ])
-        
+
         try:
             response = await self.llm.call_llm(messages)
             scores = self._parse_scores(response, len(results))
-            
+
             # 점수로 결과 정렬
             scored_results = list(zip(results, scores))
             scored_results.sort(key=lambda x: x[1], reverse=True)
-            
-            # 상위 n개만 반환, 점수 업데이트
+
+            # 점수 임계값 이상인 결과만 반환
             reranked = []
-            for result, score in scored_results[:self.top_n]:
-                result_copy = result.model_copy()
-                result_copy.relevance_score = score
-                reranked.append(result_copy)
-            
+            for result, score in scored_results:
+                if score < self.min_score:
+                    # 탈락 항목 수집
+                    if dropped_out is not None:
+                        dropped_out.append((result.title, score))
+                else:
+                    result_copy = result.model_copy()
+                    result_copy.relevance_score = score
+                    reranked.append(result_copy)
+
             return reranked
-            
+
         except Exception as e:
-            print(f"Reranking error: {e}")
-            # 에러 시 원본 상위 n개 반환
-            return results[:self.top_n]
+            logger.error(f"Reranking error: {e}")
+            # 에러 시 점수 없으므로 전체 반환
+            return results
     
     def _format_results(self, results: List[PoiSearchResult]) -> str:
         """검색 결과를 텍스트 형식으로 변환"""

@@ -19,8 +19,8 @@ class TestRerankerUnit:
     
     @pytest.fixture
     def reranker(self, mock_llm_client):
-        """Reranker 인스턴스 (Top-N=2)"""
-        return Reranker(llm_client=mock_llm_client, top_n=2)
+        """Reranker 인스턴스 (min_score=0.5)"""
+        return Reranker(llm_client=mock_llm_client, min_score=0.5)
     
     @pytest.fixture
     def sample_results(self):
@@ -46,7 +46,7 @@ class TestRerankerUnit:
         
         reranked = await reranker.rerank(sample_results, "테스트 페르소나")
         
-        # Top-N=2 설정 확인
+        # min_score=0.5 필터링 확인 (0.9, 0.8은 통과, 0.3은 미달)
         assert len(reranked) == 2
         
         # 정렬 순서 확인 (ID 3 -> ID 1)
@@ -107,8 +107,8 @@ class TestRerankerIntegration:
             
     @pytest.fixture
     def reranker(self, real_llm_client):
-        """실제 LLM을 사용하는 Reranker (Top-N=5)"""
-        return Reranker(llm_client=real_llm_client, top_n=5)
+        """실제 LLM을 사용하는 Reranker (min_score=0.5)"""
+        return Reranker(llm_client=real_llm_client, min_score=0.5)
 
     @pytest.mark.integration
     @pytest.mark.asyncio

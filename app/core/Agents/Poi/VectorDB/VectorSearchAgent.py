@@ -1,9 +1,13 @@
 from typing import Dict, List, Optional, Tuple
+import asyncio
 import json
 import os
 from pathlib import Path
 import chromadb
 from chromadb.config import Settings
+import logging
+
+logger = logging.getLogger(__name__)
 
 from app.core.Agents.Poi.VectorDB.BaseVectorSearchAgent import BaseVectorSearchAgent
 from app.core.Agents.Poi.VectorDB.EmbeddingPipeline.BaseEmbeddingPipeline import BaseEmbeddingPipeline
@@ -25,10 +29,12 @@ DEFAULT_PERSIST_DIR = os.path.join(
 class VectorSearchAgent(BaseVectorSearchAgent):
     """
     ChromaDB 기반 벡터 검색 에이전트 구현
-    
+
     EmbeddingPipeline을 포함하여 텍스트 임베딩 변환 및 저장/검색을 담당합니다.
+    모든 ChromaDB 동기 호출은 asyncio.to_thread()로 래핑하여 이벤트 루프 블로킹을 방지합니다.
+    쓰기 작업은 _write_lock으로 보호하여 hnswlib 내부 상태 동시 접근을 방지합니다.
     """
-    
+
     def __init__(
         self,
         embedding_pipeline: BaseEmbeddingPipeline,
@@ -46,68 +52,81 @@ class VectorSearchAgent(BaseVectorSearchAgent):
         self._client = None
         self._collection = None
         self._initialized = False
-    
-    def _initialize(self):
-        """ChromaDB 클라이언트 및 컬렉션 초기화 (지연 로딩)"""
+        self._init_lock = asyncio.Lock()
+        self._write_lock = asyncio.Lock()
+
+    async def _initialize(self):
+        """ChromaDB 클라이언트 및 컬렉션 초기화 (지연 로딩, lock으로 보호)"""
         if self._initialized:
             return True
-            
-        try:
-            if self.persist_directory:
-                # 디렉토리 자동 생성
-                Path(self.persist_directory).mkdir(parents=True, exist_ok=True)
-                self._client = chromadb.PersistentClient(
-                    path=self.persist_directory,
-                    settings=Settings(anonymized_telemetry=False)
-                )
-            else:
-                self._client = chromadb.Client(
-                    settings=Settings(anonymized_telemetry=False)
-                )
-            
-            self._collection = self._client.get_or_create_collection(
-                name=self.collection_name,
-                metadata={"hnsw:space": "cosine"}
-            )
-            self._initialized = True
-            return True
 
-        except Exception as e:
-            print(f"ChromaDB initialization error: {e}")
-            return False
-    
+        async with self._init_lock:
+            # Double-check after acquiring lock
+            if self._initialized:
+                return True
+            try:
+                if self.persist_directory:
+                    Path(self.persist_directory).mkdir(parents=True, exist_ok=True)
+                    self._client = await asyncio.to_thread(
+                        lambda: chromadb.PersistentClient(
+                            path=self.persist_directory,
+                            settings=Settings(anonymized_telemetry=False)
+                        )
+                    )
+                else:
+                    self._client = await asyncio.to_thread(
+                        lambda: chromadb.Client(
+                            settings=Settings(anonymized_telemetry=False)
+                        )
+                    )
+
+                self._collection = await asyncio.to_thread(
+                    lambda: self._client.get_or_create_collection(
+                        name=self.collection_name,
+                        metadata={"hnsw:space": "cosine"}
+                    )
+                )
+                self._initialized = True
+                return True
+
+            except Exception as e:
+                logger.error(f"ChromaDB initialization error: {e}")
+                return False
+
     async def search(
-        self, 
-        query_embedding: List[float], 
-        k: int,
-        city_filter: str
+        self,
+        query_embedding: List[float],
+        k: int = 10,
+        city_filter: Optional[str] = None
     ) -> List[PoiSearchResult]:
         """임베딩 벡터로 유사도 검색"""
-        if not self._initialize():
+        if not await self._initialize():
             return []
-        
+
         try:
             # 도시 필터가 있으면 where 절 구성
             where_filter = None
             if city_filter:
                 where_filter = {"city": {"$eq": city_filter}}
-            
-            results = self._collection.query(
-                query_embeddings=[query_embedding],
-                n_results=k,
-                where=where_filter,
-                include=["documents", "metadatas", "distances"]
+
+            results = await asyncio.to_thread(
+                lambda: self._collection.query(
+                    query_embeddings=[query_embedding],
+                    n_results=k,
+                    where=where_filter,
+                    include=["documents", "metadatas", "distances"]
+                )
             )
-            
+
             search_results = []
             for i, doc_id in enumerate(results.get("ids", [[]])[0]):
                 metadata = results.get("metadatas", [[]])[0][i] if results.get("metadatas") else {}
                 document = results.get("documents", [[]])[0][i] if results.get("documents") else ""
                 distance = results.get("distances", [[]])[0][i] if results.get("distances") else 1.0
-                
+
                 # cosine distance를 similarity score로 변환
                 similarity = 1 - distance
-                
+
                 result = PoiSearchResult(
                     poi_id=doc_id,
                     title=metadata.get("name", ""),
@@ -117,43 +136,44 @@ class VectorSearchAgent(BaseVectorSearchAgent):
                     relevance_score=similarity
                 )
                 search_results.append(result)
-            
+
             return search_results
-            
+
         except Exception as e:
-            print(f"Vector search error: {e}")
+            logger.error(f"Vector search error: {e}")
             return []
-    
+
     async def search_by_text(
-        self, 
-        query: str, 
-        k: int,
-        city_filter: str
+        self,
+        query: str,
+        k: int = 10,
+        city_filter: Optional[str] = None
     ) -> List[PoiSearchResult]:
         """텍스트 쿼리로 검색 (EmbeddingPipeline 사용)
-        
+
         Args:
             query: 검색 텍스트
             k: 반환할 결과 수
             city_filter: 도시 필터 (해당 도시의 POI만 검색)
         """
-        if not self._initialize():
+        if not await self._initialize():
             return []
-        
+
         try:
             # 컬렉션이 비어있으면 빈 결과 반환
-            if self._collection.count() == 0:
+            count = await asyncio.to_thread(self._collection.count)
+            if count == 0:
                 return []
-            
+
             # EmbeddingPipeline으로 쿼리 임베딩 생성
             query_embedding = await self.embedding_pipeline.embed_query(query)
-            
+
             return await self.search(query_embedding, k, city_filter)
-            
+
         except Exception as e:
-            print(f"Vector text search error: {e}")
+            logger.error(f"Vector text search error: {e}")
             return []
-    
+
     @staticmethod
     def _build_metadata(poi: PoiData) -> dict:
         """PoiData에서 ChromaDB metadata dict 생성 (전체 필드 포함)"""
@@ -229,36 +249,45 @@ class VectorSearchAgent(BaseVectorSearchAgent):
         )
 
     async def add_poi(self, poi: PoiData) -> bool:
-        """POI 데이터를 벡터 DB에 추가 (EmbeddingPipeline 사용)"""
-        if not self._initialize():
+        """POI 데이터를 벡터 DB에 추가 (EmbeddingPipeline 사용)
+
+        임베딩 생성은 lock 밖에서 수행하고, ChromaDB 쓰기만 lock으로 보호합니다.
+        """
+        if not await self._initialize():
             return False
 
         try:
-            # EmbeddingPipeline으로 임베딩 생성
-            embeddings = await self.embedding_pipeline.embed_documents([poi.raw_text])
+            # 임베딩 생성 (lock 밖 - 느린 작업)
+            embeddings = await self.embedding_pipeline.embed_documents([poi])
+            metadata = self._build_metadata(poi)
 
-            self._collection.add(
-                ids=[poi.id],
-                embeddings=embeddings,
-                documents=[poi.raw_text],
-                metadatas=[self._build_metadata(poi)]
-            )
+            # ChromaDB 쓰기 (lock 안 - hnswlib 보호)
+            async with self._write_lock:
+                await asyncio.to_thread(
+                    lambda: self._collection.add(
+                        ids=[poi.id],
+                        embeddings=embeddings,
+                        documents=[poi.raw_text],
+                        metadatas=[metadata]
+                    )
+                )
             return True
 
         except Exception as e:
-            print(f"Add POI error: {e}")
+            logger.error(f"Add POI error: {e}")
             return False
 
     async def add_pois_batch(self, pois: List[PoiData]) -> int:
         """POI 데이터를 배치로 추가 (EmbeddingPipeline 사용)
 
         배치 내 중복 ID와 컬렉션에 이미 존재하는 ID를 자동으로 필터링합니다.
+        임베딩 생성은 lock 밖에서 수행하고, ChromaDB 읽기/쓰기만 lock으로 보호합니다.
         """
-        if not self._initialize() or not pois:
+        if not await self._initialize() or not pois:
             return 0
 
         try:
-            # 1. 배치 내 중복 ID 제거 (첫 번째 항목 유지)
+            # 1. 배치 내 중복 ID 제거 (첫 번째 항목 유지) - lock 밖
             seen_ids: set = set()
             unique_pois: List[PoiData] = []
             for poi in pois:
@@ -266,42 +295,49 @@ class VectorSearchAgent(BaseVectorSearchAgent):
                     seen_ids.add(poi.id)
                     unique_pois.append(poi)
 
-            # 2. 컬렉션에 이미 존재하는 ID 필터링
             candidate_ids = [poi.id for poi in unique_pois]
-            existing = self._collection.get(ids=candidate_ids)
-            existing_ids = set(existing["ids"]) if existing and existing.get("ids") else set()
-            new_pois = [poi for poi in unique_pois if poi.id not in existing_ids]
 
-            if not new_pois:
-                return 0
+            # 2. ChromaDB 읽기/쓰기는 lock 안에서 수행
+            async with self._write_lock:
+                # 컬렉션에 이미 존재하는 ID 필터링
+                existing = await asyncio.to_thread(
+                    lambda: self._collection.get(ids=candidate_ids)
+                )
+                existing_ids = set(existing["ids"]) if existing and existing.get("ids") else set()
+                new_pois = [poi for poi in unique_pois if poi.id not in existing_ids]
 
-            ids = [poi.id for poi in new_pois]
-            documents = [poi.raw_text for poi in new_pois]
-            metadatas = [self._build_metadata(poi) for poi in new_pois]
+                if not new_pois:
+                    return 0
 
-            # EmbeddingPipeline으로 배치 임베딩 생성
-            embeddings = await self.embedding_pipeline.embed_documents(documents)
+                ids = [poi.id for poi in new_pois]
+                documents = [poi.raw_text for poi in new_pois]
+                metadatas = [self._build_metadata(poi) for poi in new_pois]
 
-            self._collection.add(
-                ids=ids,
-                embeddings=embeddings,
-                documents=documents,
-                metadatas=metadatas
-            )
-            return len(new_pois)
+                # 임베딩 생성 (lock 안이지만 await로 이벤트 루프 양보)
+                embeddings = await self.embedding_pipeline.embed_documents(new_pois)
+
+                await asyncio.to_thread(
+                    lambda: self._collection.add(
+                        ids=ids,
+                        embeddings=embeddings,
+                        documents=documents,
+                        metadatas=metadatas
+                    )
+                )
+                return len(new_pois)
 
         except Exception as e:
-            print(f"Batch add POI error: {e}")
+            logger.error(f"Batch add POI error: {e}")
             return 0
-    
+
     async def search_with_data(
         self,
         query_embedding: List[float],
-        k: int,
-        city_filter: str
+        k: int = 10,
+        city_filter: Optional[str] = None
     ) -> List[Tuple[PoiSearchResult, PoiData]]:
         """임베딩 벡터로 유사도 검색 + PoiData 복원"""
-        if not self._initialize():
+        if not await self._initialize():
             return []
 
         try:
@@ -309,11 +345,13 @@ class VectorSearchAgent(BaseVectorSearchAgent):
             if city_filter:
                 where_filter = {"city": {"$eq": city_filter}}
 
-            results = self._collection.query(
-                query_embeddings=[query_embedding],
-                n_results=k,
-                where=where_filter,
-                include=["documents", "metadatas", "distances"]
+            results = await asyncio.to_thread(
+                lambda: self._collection.query(
+                    query_embeddings=[query_embedding],
+                    n_results=k,
+                    where=where_filter,
+                    include=["documents", "metadatas", "distances"]
+                )
             )
 
             paired_results = []
@@ -339,14 +377,14 @@ class VectorSearchAgent(BaseVectorSearchAgent):
             return paired_results
 
         except Exception as e:
-            print(f"Vector search_with_data error: {e}")
+            logger.error(f"Vector search_with_data error: {e}")
             return []
 
     async def search_by_text_with_data(
         self,
         query: str,
-        k: int,
-        city_filter: str
+        k: int = 10,
+        city_filter: Optional[str] = None
     ) -> List[Tuple[PoiSearchResult, PoiData]]:
         """텍스트 쿼리로 검색 + PoiData 복원
 
@@ -355,27 +393,127 @@ class VectorSearchAgent(BaseVectorSearchAgent):
             k: 반환할 결과 수
             city_filter: 도시 필터
         """
-        if not self._initialize():
+        if not await self._initialize():
             return []
 
         try:
-            if self._collection.count() == 0:
-                print("VectorDB에 저장된 POI가 없습니다.")
+            count = await asyncio.to_thread(self._collection.count)
+            if count == 0:
+                logger.info("VectorDB에 저장된 POI가 없습니다.")
                 return []
 
             query_embedding = await self.embedding_pipeline.embed_query(query)
             return await self.search_with_data(query_embedding, k, city_filter)
 
         except Exception as e:
-            print(f"Vector text search_with_data error: {e}")
+            logger.error(f"Vector text search_with_data error: {e}")
             return []
 
     async def get_collection_size(self) -> int:
         """벡터 DB의 현재 데이터 개수 반환"""
-        if not self._initialize():
+        if not await self._initialize():
             return 0
-        
+
         try:
-            return self._collection.count()
+            return await asyncio.to_thread(self._collection.count)
         except Exception:
             return 0
+
+    async def find_by_name(
+        self,
+        name: str,
+        city_filter: Optional[str] = None
+    ) -> Optional[PoiData]:
+        """이름으로 VectorDB에서 POI 검색 (중복 확인용)
+        
+        Args:
+            name: 검색할 POI 이름
+            city_filter: 도시 필터 (선택)
+            
+        Returns:
+            일치하는 PoiData 또는 None
+        """
+        if not await self._initialize() or not name:
+            return None
+
+        try:
+            # 이름으로 정확히 일치하는 POI 검색
+            if city_filter:
+                where_filter = {
+                    "$and": [
+                        {"name": {"$eq": name}},
+                        {"city": {"$eq": city_filter}}
+                    ]
+                }
+            else:
+                where_filter = {"name": {"$eq": name}}
+            
+            results = await asyncio.to_thread(
+                lambda: self._collection.get(
+                    where=where_filter,
+                    include=["documents", "metadatas"],
+                    limit=1
+                )
+            )
+            
+            if results and results.get("ids"):
+                doc_id = results["ids"][0]
+                metadata = results["metadatas"][0] if results.get("metadatas") else {}
+                document = results["documents"][0] if results.get("documents") else ""
+                return self._reconstruct_poi_data(doc_id, metadata, document)
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"find_by_name 오류 ({name}): {e}")
+            return None
+
+    async def find_by_google_place_id(
+        self,
+        google_place_id: str,
+        city_filter: Optional[str] = None
+    ) -> Optional[PoiData]:
+        """Google Place ID로 VectorDB에서 POI 검색
+
+        Args:
+            google_place_id: 검색할 Google Place ID
+            city_filter: 도시 필터 (선택)
+
+        Returns:
+            일치하는 PoiData 또는 None
+        """
+        if not await self._initialize() or not google_place_id:
+            return None
+
+        try:
+            if city_filter:
+                where_filter = {
+                    "$and": [
+                        {"google_place_id": {"$eq": google_place_id}},
+                        {"city": {"$eq": city_filter}}
+                    ]
+                }
+            else:
+                where_filter = {"google_place_id": {"$eq": google_place_id}}
+
+            results = await asyncio.to_thread(
+                lambda: self._collection.get(
+                    where=where_filter,
+                    include=["documents", "metadatas"],
+                    limit=1
+                )
+            )
+
+            if results and results.get("ids"):
+                doc_id = results["ids"][0]
+                metadata = results["metadatas"][0] if results.get("metadatas") else {}
+                document = results["documents"][0] if results.get("documents") else ""
+                return self._reconstruct_poi_data(doc_id, metadata, document)
+
+            return None
+
+        except Exception as e:
+            logger.error(f"find_by_google_place_id 오류 ({google_place_id}): {e}")
+            return None
+
+

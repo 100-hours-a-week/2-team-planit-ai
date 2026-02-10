@@ -1,3 +1,6 @@
+import logging
+logger = logging.getLogger(__name__)
+
 import httpx
 from typing import Optional
 
@@ -54,5 +57,5 @@ class JinaReader:
                 response.raise_for_status()
                 return response.json()
         except Exception as e:
-            print(f"JinaReader error for {url}: {e}")
+            logger.error(f"JinaReader error for {url}: {e}")
             return None

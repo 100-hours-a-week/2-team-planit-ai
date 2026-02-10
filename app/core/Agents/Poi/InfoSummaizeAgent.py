@@ -1,3 +1,6 @@
+import logging
+logger = logging.getLogger(__name__)
+
 from typing import List
 import uuid
 import re
@@ -160,7 +163,7 @@ class InfoSummarizeAgent:
             return pois[:max_pois]
             
         except Exception as e:
-            print(f"Info summarize error: {e}")
+            logger.error(f"Info summarize error: {e}")
             return []
     
     def _format_results(self, results: List[PoiSearchResult]) -> str:

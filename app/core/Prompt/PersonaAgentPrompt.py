@@ -81,10 +81,6 @@ Example 2 — 제약과 욕구가 충돌하는 입력
 [최종 페르소나 한 문장 — 한국어로 자연스럽게 작성]
 </final_response>
 
-참고: 사용자가 JSON 출력을 명시적으로 요청한 경우에만 다음 JSON 구조로 대체합니다:
-{{
-  "final_response": "[...]" 
-}}
 </output_format>
 """
 
