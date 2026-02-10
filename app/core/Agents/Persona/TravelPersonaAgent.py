@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import List, Optional, TypedDict
 from langgraph.graph import StateGraph, END
 from app.core.models.PersonaAgentDataclass.persona import QAItem, Persona
@@ -47,9 +48,16 @@ class TravelPersonaAgent:
         """
         사용자에게 던질 질문을 생성하거나, 질문 개수가 차면 다음 단계로 이동하는 단계
         """
+        itinerary_request = state["itinerary_request"]
+        travel_days = _calculate_travel_days(
+            itinerary_request.arrivalDate,
+            itinerary_request.departureDate,
+        )
+
         user_prompt = self.persona_prompt.format(
-            pre_survey=itinerary_request_to_pre_survey(state["itinerary_request"]),
+            pre_survey=itinerary_request_to_pre_survey(itinerary_request),
             qa_answers=qa_items_to_qa_answers(state["qa_items"]),
+            travel_days=travel_days,
         )
 
         logger.info("유저 페르소나 에이전트 질문 생성")
@@ -122,3 +130,12 @@ def qa_items_to_qa_answers(qa_items: List[QAItem], intend: int = 2, indent_char:
         qa_lines.append(indent_char * (intend + 1) + f"<answer>{item.answer}</answer>")
         qa_lines.append(indent_char * intend + "</qa>")
     return "\n".join(qa_lines)
+
+def _calculate_travel_days(arrival_date: str, departure_date: str) -> int:
+    """
+    도착일과 출발일(YYYY-MM-DD)로부터 여행 일수를 계산합니다.
+    당일 여행(같은 날)은 1일로 간주합니다.
+    """
+    arrival = datetime.strptime(arrival_date, "%Y-%m-%d")
+    departure = datetime.strptime(departure_date, "%Y-%m-%d")
+    return max((departure - arrival).days + 1, 1)

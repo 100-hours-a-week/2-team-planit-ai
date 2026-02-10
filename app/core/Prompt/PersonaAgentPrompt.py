@@ -12,6 +12,8 @@ PERSONA_GENTERATE_PROMPT = """
 {pre_survey}
     </ItineraryRequest>
 
+    <TravelDays>{travel_days}일</TravelDays>
+
     <Answers>
 {qa_answers}
     </Answers>
