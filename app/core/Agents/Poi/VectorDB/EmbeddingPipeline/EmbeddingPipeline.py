@@ -104,7 +104,7 @@ class EmbeddingPipeline(BaseEmbeddingPipeline):
 
         return all_embeddings
 
-    def structured_summary_formatter(self, poiData: PoiData) -> str:
+    def structured_summary_formatter(self,poiData: PoiData) -> str:
         """
         Structured format using PoiData fields.
         Output: "restaurant | 평점 4.5 | MODERATE | 에디토리얼: ... | 리뷰: ..."
