@@ -7,6 +7,7 @@ ItineraryPlanAgent: LLM을 활용한 일정 생성
 - Transfer는 생성하지 않음 (DistanceCalculateAgent가 담당)
 """
 import logging
+import re
 from typing import List, Optional, Type
 from pydantic import BaseModel, Field
 
@@ -21,6 +22,7 @@ from app.core.models.ItineraryAgentDataclass.itinerary import Itinerary, Schedul
 class ScheduledPoi(BaseModel):
     """시간이 배정된 POI (LLM 출력용)"""
     poi_id: str = Field(..., description="POI ID")
+    poi_name: str = Field(..., description="POI 이름")
     start_time: str = Field(..., description="시작 시간 (HH:MM, 24시간제)")
     duration_minutes: int = Field(..., description="체류 시간 (분)")
 
@@ -51,7 +53,8 @@ class ItineraryPlanAgent:
 5. 각 POI에 시작 시간(HH:MM)과 체류 시간(분)을 배정하세요
 6. 하루 일정은 09:00~21:00 사이로 계획하세요. 단 여행의 시작일({travel_start_date} {travel_start_time})과 종료일({travel_end_date} {travel_end_time})은 해당 시간에 맞게 조정하세요.
 7. POI 간 이동 시간 30분을 고려하여 시간을 배정하세요
-8. 체류 시간은 장소 특성에 맞게 자유롭게 결정하세요"""
+8. 체류 시간은 장소 특성에 맞게 자유롭게 결정하세요
+9. 각 POI에 대해 poi_id와 poi_name을 반드시 함께 출력하세요. poi_id와 poi_name은 주어진 POI 목록의 값을 그대로 사용하세요."""
 
     def __init__(self, llm_client: LangchainClient):
         """
@@ -176,30 +179,51 @@ class ItineraryPlanAgent:
 """
         return prompt
     
+    @staticmethod
+    def _normalize_name(name: str) -> str:
+        """POI 이름 정규화 (폴백 매핑용)"""
+        if not name:
+            return ""
+        return re.sub(r'\s+', ' ', name.strip()).lower()
+
     def _convert_to_itineraries(
         self,
         result: ItineraryPlanResult,
         pois: List[PoiData]
     ) -> List[Itinerary]:
-        """LLM 결과를 Itinerary로 변환"""
-        # POI ID -> PoiData 매핑
+        """LLM 결과를 Itinerary로 변환 (ID 매핑 → 이름 폴백)"""
+        # 1차: POI ID -> PoiData 매핑
         poi_map = {poi.id: poi for poi in pois}
+        # 2차 폴백: 정규화된 이름 -> PoiData 매핑
+        name_map = {self._normalize_name(poi.name): poi for poi in pois}
 
-        unmapped_poi_ids = []
+        unmapped_pois = []
         itineraries = []
         for day_plan in result.day_plans:
             day_pois = []
             day_schedule = []
             for sp in day_plan.scheduled_pois:
+                matched_poi = None
+
+                # 1차: ID 기반 매핑
                 if sp.poi_id in poi_map:
-                    day_pois.append(poi_map[sp.poi_id])
+                    matched_poi = poi_map[sp.poi_id]
+                else:
+                    # 2차: 이름 기반 폴백 매핑
+                    normalized_name = self._normalize_name(sp.poi_name)
+                    if normalized_name in name_map:
+                        matched_poi = name_map[normalized_name]
+                        logger.info("이름 폴백 매핑 성공: '%s' → poi_id=%s", sp.poi_name, matched_poi.id)
+
+                if matched_poi:
+                    day_pois.append(matched_poi)
                     day_schedule.append(ScheduledPoiEntry(
-                        poi_id=sp.poi_id,
+                        poi_id=matched_poi.id,
                         start_time=sp.start_time,
                         duration_minutes=sp.duration_minutes
                     ))
                 else:
-                    unmapped_poi_ids.append(sp.poi_id)
+                    unmapped_pois.append(f"{sp.poi_name} (id={sp.poi_id})")
 
             itinerary = Itinerary(
                 date=day_plan.date,
@@ -210,8 +234,8 @@ class ItineraryPlanAgent:
             )
             itineraries.append(itinerary)
 
-        if unmapped_poi_ids:
-            logger.warning("매핑 실패 POI ID: %s", unmapped_poi_ids)
+        if unmapped_pois:
+            logger.warning("매핑 실패 POI (ID+이름 모두 불일치): %s", unmapped_pois)
         logger.info("Itinerary 변환 완료: %d일 일정 생성", len(itineraries))
         return itineraries
     
