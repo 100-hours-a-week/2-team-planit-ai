@@ -1,6 +1,6 @@
 services:
-  planit-agent:
-    container_name: planit-agent
+  planit:
+    container_name: planit
     build:
       context: .
       dockerfile: Dockerfile
@@ -25,4 +25,11 @@ services:
       GOOGLE_MAPS_API_KEY: "${GOOGLE_MAPS_API_KEY:-}"
       TAVILY_API_KEY: "${TAVILY_API_KEY:?TAVILY_API_KEY is required}"
       LANGEXTRACT_API_KEY: "${LANGEXTRACT_API_KEY:?LANGEXTRACT_API_KEY is required}"
+    volumes:
+      - ./logs:/var/log/planit
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "10"
     restart: unless-stopped
