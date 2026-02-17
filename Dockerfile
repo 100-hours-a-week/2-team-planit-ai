@@ -15,8 +15,10 @@ COPY app /app/app
 COPY main.py /app/main.py
 
 RUN pip install --upgrade pip && pip install .
-RUN mkdir -p /var/log/planit
+RUN mkdir -p /var/log/planit/ai
+
+VOLUME ["/var/log/planit/ai"]
 
 EXPOSE 8000
 
-CMD ["sh", "-c", "python main.py 2>&1 | tee -a /var/log/planit/app.log"]
+CMD ["sh", "-c", "python main.py 2>&1 | tee -a /var/log/planit/ai/app.log"]
