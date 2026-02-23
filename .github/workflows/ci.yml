@@ -6,22 +6,32 @@ on:
   push:
     branches: [develop, main]
 
+permissions:
+  contents: read
+
 jobs:
   ai-ci:
-    # EC2가 arm64면 아래를 ubuntu-24.04-arm 로 바꿔야 "그대로 실행되는 .venv"가 나옴
     runs-on: ubuntu-latest
+
+    env:
+      AWS_REGION: ap-northeast-2
+      ECR_REPOSITORY: planit-ai
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python 3.11
+      # =========================
+      # develop: 기존 tar.gz 아티팩트 빌드
+      # =========================
+      - name: Set up Python 3.11 (develop path)
+        if: startsWith(github.ref, 'refs/heads/develop') || github.base_ref == 'develop'
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      # uv 설치 + uv 캐시(의존성 설치 속도)
-      - name: Set up uv
+      - name: Set up uv (develop path)
+        if: startsWith(github.ref, 'refs/heads/develop') || github.base_ref == 'develop'
         uses: astral-sh/setup-uv@v3
         with:
           enable-cache: true
@@ -29,16 +39,17 @@ jobs:
             uv.lock
             pyproject.toml
 
-      - name: Sync dependencies (locked)
+      - name: Sync dependencies (locked) (develop path)
+        if: startsWith(github.ref, 'refs/heads/develop') || github.base_ref == 'develop'
         run: uv sync --frozen
 
-
-      - name: Build artifact tar.gz
+      - name: Build artifact tar.gz (develop path)
+        if: startsWith(github.ref, 'refs/heads/develop') || github.base_ref == 'develop'
         run: |
+          set -euo pipefail
           rm -rf dist
           mkdir -p dist/planit-ai
 
-          #소스 + .venv 포함해서 배포 폴더 구성
           rsync -a . dist/planit-ai \
             --exclude ".env" \
             --exclude ".venv" \
@@ -49,17 +60,82 @@ jobs:
             --exclude ".mypy_cache" \
             --exclude "dist"
 
-          # tar.gz 생성
           tar -C dist -czf planit-ai.tar.gz planit-ai
 
-      - name: Upload tar.gz (develop/main push only)
-        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
+      - name: Upload tar.gz (develop push only)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
         uses: actions/upload-artifact@v4
         with:
           name: planit-ai-tar
           path: planit-ai.tar.gz
           retention-days: 7
 
+      # =========================
+      # main: Docker build/test + ECR push
+      # =========================
+      - name: Set up Docker Buildx (main path)
+        if: startsWith(github.ref, 'refs/heads/main') || github.base_ref == 'main'
+        uses: docker/setup-buildx-action@v3
+
+      # ✅ OIDC 제거하고, Access Key 방식으로 교체
+      - name: Configure AWS credentials (Access Key) (main push only)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to ECR (main push only)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Compute image tags (main path)
+        if: startsWith(github.ref, 'refs/heads/main') || github.base_ref == 'main'
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          SHA="${GITHUB_SHA}"
+          SHORT="${SHA:0:7}"
+          TS="$(date -u +%Y%m%d%H%M%S)"
+          echo "sha_tag=sha-${SHORT}" >> "$GITHUB_OUTPUT"
+          echo "ts_tag=ts-${TS}" >> "$GITHUB_OUTPUT"
+
+      - name: Build Docker image (main path)
+        if: startsWith(github.ref, 'refs/heads/main') || github.base_ref == 'main'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # PR(main)에서는 ECR 로그인을 안 하므로 로컬 태그로만 빌드
+          if [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            REG="${{ steps.ecr.outputs.registry }}"
+            IMG="${REG}/${{ env.ECR_REPOSITORY }}"
+            docker build -t "${IMG}:${{ steps.meta.outputs.sha_tag }}" .
+          else
+            docker build -t "local/planit-ai:${{ steps.meta.outputs.sha_tag }}" .
+          fi
+
+      - name: Push image to ECR (main push only)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          set -euo pipefail
+          REG="${{ steps.ecr.outputs.registry }}"
+          IMG="${REG}/${{ env.ECR_REPOSITORY }}"
+
+          docker push "${IMG}:${{ steps.meta.outputs.sha_tag }}"
+
+          docker tag "${IMG}:${{ steps.meta.outputs.sha_tag }}" "${IMG}:${{ steps.meta.outputs.ts_tag }}"
+          docker push "${IMG}:${{ steps.meta.outputs.ts_tag }}"
+
+          docker tag "${IMG}:${{ steps.meta.outputs.sha_tag }}" "${IMG}:prod"
+          docker push "${IMG}:prod"
+
+      # =========================
+      # Notification
+      # =========================
       - name: Send Discord Notification
         if: failure()
         run: |
