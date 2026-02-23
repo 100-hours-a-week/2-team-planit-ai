@@ -1,12 +1,7 @@
-name: Rollback - AI (Manual)
+name: Rollback - AI (Auto Previous LT)
 
 on:
   workflow_dispatch:
-    inputs:
-      image_tag:
-        description: "Rollback image tag (e.g. sha-1a2b3c4). Must exist in ECR."
-        required: true
-        default: "sha-"
 
 jobs:
   rollback:
@@ -14,17 +9,12 @@ jobs:
 
     env:
       AWS_REGION: ap-northeast-2
-      ECR_REPOSITORY: planit-ai
       ASG_NAME: planit-v2-asg-ai
-      SSM_PREFIX: /planit/prod/ai
       MIN_HEALTHY_PERCENT: "50"
       INSTANCE_WARMUP: "180"
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Configure AWS credentials (Access Key)
+      - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -34,89 +24,51 @@ jobs:
       - name: Install jq
         run: sudo apt-get update -y && sudo apt-get install -y jq
 
-      - name: Validate input tag
-        id: tag
-        shell: bash
-        run: |
-          set -euo pipefail
-          TAG="${{ inputs.image_tag }}"
-          if [[ ! "$TAG" =~ ^sha-[0-9a-fA-F]{7}$ ]]; then
-            echo "image_tag must look like sha-1a2b3c4"
-            exit 1
-          fi
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "Rollback tag: $TAG"
-
-      # user-data 렌더링 (IMAGE_TAG만 치환)
-      - name: Render user-data with rollback tag
-        id: ud
-        shell: bash
-        run: |
-          set -euo pipefail
-          TAG="${{ steps.tag.outputs.tag }}"
-          test -f resources/user-data.sh
-          sed "s|{{IMAGE_TAG}}|$TAG|g" resources/user-data.sh > rendered-userdata.sh
-          base64 -w 0 rendered-userdata.sh > userdata.b64
-
-      # Launch Template 새 버전 생성 + default 지정
-      - name: Create new Launch Template version (rollback) + set default
+      - name: Resolve Launch Template ID
         id: lt
-        shell: bash
         run: |
-          set -euo pipefail
-
           LT_ID=$(aws autoscaling describe-auto-scaling-groups \
             --auto-scaling-group-names "$ASG_NAME" \
             --query "AutoScalingGroups[0].LaunchTemplate.LaunchTemplateId" \
             --output text)
+          echo "lt_id=$LT_ID" >> "$GITHUB_OUTPUT"
 
-          if [ -z "$LT_ID" ] || [ "$LT_ID" = "None" ]; then
-            echo "Failed to resolve LaunchTemplateId from ASG."
-            exit 1
-          fi
+      - name: Set LT default to previous version
+        id: set
+        run: |
+          LT_ID="${{ steps.lt.outputs.lt_id }}"
 
           CURRENT=$(aws ec2 describe-launch-templates \
             --launch-template-ids "$LT_ID" \
             --query "LaunchTemplates[0].DefaultVersionNumber" \
             --output text)
 
-          NEW=$(aws ec2 create-launch-template-version \
-            --launch-template-id "$LT_ID" \
-            --source-version "$CURRENT" \
-            --version-description "rollback-ai:${{ steps.tag.outputs.tag }} (${GITHUB_RUN_ID})" \
-            --launch-template-data "{\"UserData\":\"$(cat userdata.b64)\"}" \
-            --query "LaunchTemplateVersion.VersionNumber" \
-            --output text)
+          PREV=$((CURRENT - 1))
+
+          if [ "$PREV" -lt 1 ]; then
+            echo "No previous version available"
+            exit 1
+          fi
 
           aws ec2 modify-launch-template \
             --launch-template-id "$LT_ID" \
-            --default-version "$NEW"
+            --default-version "$PREV"
 
-          echo "lt_id=$LT_ID" >> "$GITHUB_OUTPUT"
-          echo "new_version=$NEW" >> "$GITHUB_OUTPUT"
+          echo "from=$CURRENT" >> "$GITHUB_OUTPUT"
+          echo "to=$PREV" >> "$GITHUB_OUTPUT"
 
-          echo "Rollback LT default updated: $CURRENT -> $NEW"
-
-      # Instance Refresh 시작
-      - name: Start Instance Refresh (rollback)
+      - name: Start Instance Refresh
         id: refresh
-        shell: bash
         run: |
-          set -euo pipefail
           ID=$(aws autoscaling start-instance-refresh \
             --auto-scaling-group-name "$ASG_NAME" \
             --preferences "MinHealthyPercentage=${MIN_HEALTHY_PERCENT},InstanceWarmup=${INSTANCE_WARMUP}" \
             --query "InstanceRefreshId" \
             --output text)
-
           echo "id=$ID" >> "$GITHUB_OUTPUT"
-          echo "Started rollback refresh $ID"
 
-      # Refresh 모니터링
-      - name: Monitor Instance Refresh (rollback)
-        shell: bash
+      - name: Monitor Instance Refresh
         run: |
-          set -euo pipefail
           ID="${{ steps.refresh.outputs.id }}"
           for i in {1..90}; do
             STATUS=$(aws autoscaling describe-instance-refreshes \
@@ -127,23 +79,9 @@ jobs:
 
             echo "Status: $STATUS"
 
-            if [ "$STATUS" = "Successful" ]; then
-              exit 0
-            fi
-            if [ "$STATUS" = "Failed" ] || [ "$STATUS" = "Cancelled" ]; then
-              exit 1
-            fi
+            if [ "$STATUS" = "Successful" ]; then exit 0; fi
+            if [ "$STATUS" = "Failed" ] || [ "$STATUS" = "Cancelled" ]; then exit 1; fi
+
             sleep 20
           done
-
-          echo "Timeout"
           exit 1
-
-      - name: Send Discord Notification
-        if: failure()
-        run: |
-          RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          curl -H "Content-Type: application/json" \
-               -X POST \
-               -d "{\"content\": \"Rollback - AI 실패\n🔗 ${RUN_URL}\"}" \
-               ${{ secrets.DISCORD_WEBHOOK_URL }}
