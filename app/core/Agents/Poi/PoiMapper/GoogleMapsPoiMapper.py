@@ -355,11 +355,10 @@ class GoogleMapsPoiMapper(BasePoiMapper):
 
         # 좌표가 있으면 locationRestriction(rectangle) 적용 (해당 지역 내 결과만 반환)
         if location_bias and "latitude" in location_bias and "longitude" in location_bias:
-            lat = location_bias["latitude"]
-            lng = location_bias["longitude"]
-            # 반경(m)을 위도/경도 오프셋으로 변환 (근사값: 위도 1도 ≈ 111km)
+            lat = location_bias.get("latitude")
+            lng = location_bias.get("longitude")
             lat_offset = self.DEFAULT_LOCATION_BIAS_RADIUS / 111_000
-            lng_offset = self.DEFAULT_LOCATION_BIAS_RADIUS / (111_000 * max(abs(math.cos(math.radians(lat))), 0.01))
+            lng_offset = self.DEFAULT_LOCATION_BIAS_RADIUS / 111_000
             payload["locationRestriction"] = {
                 "rectangle": {
                     "low": {

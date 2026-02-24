@@ -44,3 +44,5 @@ inspect_db.py
 .serena
 
 zzzzz
+
+*.resolved
