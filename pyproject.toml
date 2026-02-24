@@ -28,6 +28,8 @@ dependencies = [
     "peft>=0.18.1",
     "torchvision>=0.25.0",
     "einops>=0.8.2",
+    "motor>=3.7.1",
+    "redis[hiredis]>=5.0.0",
 ]
 
 [tool.pytest.ini_options]
