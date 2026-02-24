@@ -39,7 +39,7 @@ class Settings(BaseSettings):
     mongodb_db_name: str = "planit_chat"
 
     # Redis Settings
-    redis_url: str = "redis://localhost:6379"
+    redis_url: str = "redis://localhost:6379/0"
     # redis_request_stream: str = "itinerary:request"
     redis_request_stream: str = "stream:ai-jobs"
     # redis_result_stream: str = "itinerary:result"
