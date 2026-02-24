@@ -75,8 +75,47 @@ def _build_service() -> GenInitItineraryService:
     )
 
 
-async def run_worker():
-    """메인 워커 루프"""
+async def _process_message(r, service, msg_id, fields):
+    """단일 메시지를 처리하고 결과 전송 + ACK"""
+    trip_id = fields.get("tripId", "unknown")
+    try:
+        request = ItineraryRequest.model_validate_json(fields["payload"])
+        logger.info("Job tripId=%s 처리 시작", trip_id)
+
+        result = await service.gen_init_itinerary(request)
+
+        result_fields = {
+            "tripId": trip_id,
+            "status": "SUCCESS",
+            "payload": result.model_dump_json(),
+        }
+    except Exception as e:
+        logger.exception("Job tripId=%s 처리 실패", trip_id)
+        result_fields = {
+            "tripId": trip_id,
+            "status": "FAIL",
+            "error": str(e),
+        }
+
+    await r.xadd(
+        settings.redis_result_stream,
+        result_fields,
+        maxlen=settings.redis_max_stream_len,
+    )
+    await r.xack(
+        settings.redis_request_stream,
+        settings.redis_consumer_group,
+        msg_id,
+    )
+    logger.info(
+        "Job tripId=%s 완료 - status=%s",
+        trip_id,
+        result_fields["status"],
+    )
+
+
+async def run_worker(shutdown_event: asyncio.Event | None = None):
+    """메인 워커 루프. shutdown_event가 주어지면 그것으로 종료를 판단."""
     global _shutdown
 
     r = await RedisClient.get_instance()
@@ -93,7 +132,27 @@ async def run_worker():
         settings.redis_request_stream,
     )
 
-    while not _shutdown:
+    # ── pending 메시지 복구: ACK 안 된 메시지를 먼저 처리 ──
+    pending = await r.xreadgroup(
+        groupname=settings.redis_consumer_group,
+        consumername=settings.redis_consumer_name,
+        streams={settings.redis_request_stream: "0"},
+        count=100,
+    )
+    for stream_name, entries in pending:
+        for msg_id, fields in entries:
+            if not fields:
+                # 이미 ACK 됐지만 아직 PEL에 남아있는 경우 (빈 필드)
+                continue
+            logger.info("Pending 메시지 복구: msg_id=%s", msg_id)
+            await _process_message(r, service, msg_id, fields)
+
+    # ── 메인 루프: 새 메시지 소비 ──
+    while True:
+        if shutdown_event and shutdown_event.is_set():
+            break
+        if not shutdown_event and _shutdown:
+            break
         messages = await r.xreadgroup(
             groupname=settings.redis_consumer_group,
             consumername=settings.redis_consumer_name,
@@ -107,43 +166,11 @@ async def run_worker():
 
         for stream_name, entries in messages:
             for msg_id, fields in entries:
-                trip_id = fields.get("tripId", "unknown")
-                try:
-                    request = ItineraryRequest.model_validate_json(fields["payload"])
-                    logger.info("Job tripId=%s 처리 시작", trip_id)
+                await _process_message(r, service, msg_id, fields)
 
-                    result = await service.gen_init_itinerary(request)
-
-                    result_fields = {
-                        "tripId": trip_id,
-                        "status": "SUCCESS",
-                        "payload": result.model_dump_json(),
-                    }
-                except Exception as e:
-                    logger.exception("Job tripId=%s 처리 실패", trip_id)
-                    result_fields = {
-                        "tripId": trip_id,
-                        "status": "FAIL",
-                        "error": str(e),
-                    }
-
-                await r.xadd(
-                    settings.redis_result_stream,
-                    result_fields,
-                    maxlen=settings.redis_max_stream_len,
-                )
-                await r.xack(
-                    settings.redis_request_stream,
-                    settings.redis_consumer_group,
-                    msg_id,
-                )
-                logger.info(
-                    "Job tripId=%s 완료 - status=%s",
-                    trip_id,
-                    result_fields["status"],
-                )
-
-    await RedisClient.close()
+    # 단독 실행 시에만 Redis 연결 정리 (lifespan에서는 lifespan이 담당)
+    if not shutdown_event:
+        await RedisClient.close()
     logger.info("Worker 종료")
 
 
