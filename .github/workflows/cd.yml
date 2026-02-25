@@ -9,7 +9,10 @@ on:
 jobs:
   ai-cd:
     runs-on: ubuntu-latest
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' }}
+    concurrency:
+      group: cd-ai-main
+      cancel-in-progress: false
 
     env:
       AWS_REGION: ap-northeast-2
@@ -123,7 +126,24 @@ jobs:
       # Refresh 모니터링
       - name: Monitor Instance Refresh
         run: |
+          set -euo pipefail
           ID="${{ steps.refresh.outputs.id }}"
+
+          if [ -z "$ID" ]; then
+            echo "Instance refresh id is empty"
+            exit 1
+          fi
+
+          cancel_refresh() {
+            echo "Requesting cancel for instance refresh: $ID"
+            aws autoscaling cancel-instance-refresh \
+              --auto-scaling-group-name "$ASG_NAME" \
+              || echo "Cancel request failed or no active refresh"
+          }
+
+          # 워크플로우 취소/중단 시에도 최대한 refresh 취소 시도
+          trap 'echo "Cancellation signal received"; cancel_refresh; exit 1' INT TERM
+
           for i in {1..90}; do
             STATUS=$(aws autoscaling describe-instance-refreshes \
               --auto-scaling-group-name "$ASG_NAME" \
@@ -138,6 +158,7 @@ jobs:
             fi
 
             if [ "$STATUS" = "Failed" ] || [ "$STATUS" = "Cancelled" ]; then
+              cancel_refresh
               exit 1
             fi
 
@@ -145,20 +166,34 @@ jobs:
           done
 
           echo "Timeout"
+          cancel_refresh
           exit 1
-      - name: Remove IP from Security Group
-        if: always()
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_REGION: ap-northeast-2
+
+      - name: Cancel Instance Refresh on failure/cancel
+        if: ${{ failure() || cancelled() }}
         run: |
-          aws ec2 revoke-security-group-ingress \
-            --group-id ${{ secrets.SECURITY_GROUP_ID }} \
-            --protocol tcp \
-            --port 22 \
-            --cidr ${{ steps.get-ip.outputs.ipv4 }}/32 \
-            || echo "Failed to remove IP or rule not found"
+          set -euo pipefail
+          ID="${{ steps.refresh.outputs.id }}"
+
+          if [ -z "$ID" ]; then
+            echo "No refresh id found. Skip cancel."
+            exit 0
+          fi
+
+          STATUS=$(aws autoscaling describe-instance-refreshes \
+            --auto-scaling-group-name "$ASG_NAME" \
+            --instance-refresh-ids "$ID" \
+            --query "InstanceRefreshes[0].Status" \
+            --output text || echo "Unknown")
+
+          echo "Current refresh status: $STATUS"
+          if [ "$STATUS" = "InProgress" ] || [ "$STATUS" = "Pending" ]; then
+            aws autoscaling cancel-instance-refresh \
+              --auto-scaling-group-name "$ASG_NAME"
+            echo "Cancel requested for refresh $ID"
+          else
+            echo "No active refresh to cancel"
+          fi
 
       - name: Send Discord Notification
         if: failure()
