@@ -15,7 +15,7 @@ from pydantic import BaseModel
 
 from app.core.config import settings
 from app.core.models.LlmClientDataclass.ChatMessageDataclass import ChatMessage
-# from app.core.langfuse_setup import get_langfuse_handler
+from app.core.langfuse_setup import get_langfuse_handler
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +48,9 @@ class LangchainClient:
             temperature=temperature,
             max_tokens=max_tokens,
             streaming=True,
+            model_kwargs={
+                "repetition_penalty": 1.1,
+            },
         )
 
     async def call_structured(self, prompt: ChatMessage, model: Type[T]) -> T:
