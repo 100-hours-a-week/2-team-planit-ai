@@ -15,7 +15,7 @@ from pydantic import BaseModel
 
 from app.core.config import settings
 from app.core.models.LlmClientDataclass.ChatMessageDataclass import ChatMessage
-from app.core.langfuse_setup import get_langfuse_handler
+# from app.core.langfuse_setup import get_langfuse_handler
 
 logger = logging.getLogger(__name__)
 
@@ -64,17 +64,18 @@ class LangchainClient:
         structured_llm = self.llm.with_structured_output(model, include_raw=True)
         messages = self._convert_messages(prompt)
 
-        # Langfuse CallbackHandler 주입
-        callbacks = []
-        handler = get_langfuse_handler(tags=["langchain-structured"])
-        if handler:
-            callbacks.append(handler)
+        # # Langfuse CallbackHandler 주입
+        # callbacks = []
+        # handler = get_langfuse_handler(tags=["langchain-structured"])
+        # if handler:
+        #     callbacks.append(handler)
 
         try:
-            result = await structured_llm.ainvoke(
-                messages,
-                config={"callbacks": callbacks} if callbacks else None,
-            )
+            result = await structured_llm.ainvoke(messages)
+            # result = await structured_llm.ainvoke(
+            #     messages,
+            #     config={"callbacks": callbacks} if callbacks else None,
+            # )
         except Exception as e:
             # 예외 체인에서 잘린 응답 추출 시도
             self._log_truncated_response(e)
