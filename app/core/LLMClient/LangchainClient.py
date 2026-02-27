@@ -48,7 +48,7 @@ class LangchainClient:
             temperature=temperature,
             max_tokens=max_tokens,
             streaming=True,
-            model_kwargs={
+            extra_body={
                 "repetition_penalty": 1.1,
             },
         )
