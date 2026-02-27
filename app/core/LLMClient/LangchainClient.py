@@ -48,6 +48,9 @@ class LangchainClient:
             temperature=temperature,
             max_tokens=max_tokens,
             streaming=True,
+            model_kwargs={
+                "repetition_penalty": 1.1,
+            },
         )
 
     async def call_structured(self, prompt: ChatMessage, model: Type[T]) -> T:
