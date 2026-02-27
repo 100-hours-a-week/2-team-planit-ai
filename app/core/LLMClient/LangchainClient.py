@@ -15,7 +15,7 @@ from pydantic import BaseModel
 
 from app.core.config import settings
 from app.core.models.LlmClientDataclass.ChatMessageDataclass import ChatMessage
-from app.core.langfuse_setup import get_langfuse_handler
+# from app.core.langfuse_setup import get_langfuse_handler
 
 logger = logging.getLogger(__name__)
 
