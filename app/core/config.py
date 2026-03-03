@@ -34,6 +34,21 @@ class Settings(BaseSettings):
     tavily_api_key: Optional[str]
     langextract_api_key: Optional[str]
 
+    # MongoDB Settings
+    mongodb_uri: Optional[str] = "mongodb://127.0.0.1:27017"
+    mongodb_db_name: str = "planit_chat"
+
+    # Redis Settings
+    redis_url: str = "redis://:localpass@localhost:6379/0"
+    # redis_request_stream: str = "itinerary:request"
+    redis_request_stream: str = "stream:ai-jobs"
+    # redis_result_stream: str = "itinerary:result"
+    redis_result_stream: str = "stream:itinerary-results"
+    redis_consumer_group: str = "planit-workers"
+    redis_consumer_name: str = "worker-1"
+    redis_block_ms: int = 5000
+    redis_max_stream_len: int = 10000
+
     # Vector DB Settings
     # vector_db_path: str
 

@@ -391,7 +391,7 @@ class PoiGraph:
 
             for pd in batch_poi_data:
                 all_poi_data[pd.id] = pd
-            # TODO: 리랭킹 전까지 점수가 안나오니깐 리랭킹하는동안 POI검색은 계속함
+
             # --- 2) 배치 리랭킹 ---
             if processed_batch:
                 rerank_pre_count += len(processed_batch)
