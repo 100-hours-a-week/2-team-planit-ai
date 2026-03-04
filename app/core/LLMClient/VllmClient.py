@@ -7,6 +7,37 @@ from app.core.config import settings
 from app.core.models.LlmClientDataclass.ChatMessageDataclass import ChatMessage
 from app.core.LLMClient.BaseLlmClient import BaseLLMClient
 
+try:
+    from langfuse import observe, get_client as get_langfuse_client
+except ImportError:
+    # langfuse 미설치 시 no-op 데코레이터
+    def observe(**kwargs):
+        def decorator(fn):
+            return fn
+        return decorator
+    def get_langfuse_client():
+        return None
+
+
+def _report_usage_to_langfuse(data: dict, model_name: str = "") -> None:
+    """API 응답의 usage 필드를 Langfuse generation에 보고"""
+    try:
+        client = get_langfuse_client()
+        if client is None:
+            return
+        usage = data.get("usage", {})
+        if not usage:
+            return
+        client.update_current_generation(
+            model=data.get("model", model_name),
+            usage_details={
+                "input": usage.get("prompt_tokens", 0),
+                "output": usage.get("completion_tokens", 0),
+            },
+        )
+    except Exception:
+        pass  # 트레이싱 실패가 메인 로직에 영향 주지 않도록
+
 
 T = TypeVar('T')
 
@@ -130,6 +161,7 @@ class VllmClient(BaseLLMClient):
                 await asyncio.sleep(2 ** attempt)
                 continue
 
+    @observe(as_type="generation")
     async def call_llm(self, prompt: ChatMessage) -> str:
         """
         비스트리밍 LLM API 호출 (sync)
@@ -166,6 +198,7 @@ class VllmClient(BaseLLMClient):
                         return f"LLM 서버 오류 (HTTP {response.status_code})"
 
                     data = response.json()
+                    _report_usage_to_langfuse(data)
                     if "choices" in data and data["choices"]:
                         return data["choices"][0]["message"]["content"]
                     return ""
@@ -176,6 +209,7 @@ class VllmClient(BaseLLMClient):
                 await asyncio.sleep(2 ** attempt)
                 continue
 
+    @observe(as_type="generation")
     async def call_llm_structured(self, prompt: ChatMessage, model: Type[T]) -> T:
         """
         vLLM의 Guided Decoding 기능을 사용하여 구조화된 출력을 받아옴
@@ -219,6 +253,7 @@ class VllmClient(BaseLLMClient):
                         raise Exception(f"LLM 서버 오류 (HTTP {response.status_code}): {response.text}")
 
                     data = response.json()
+                    _report_usage_to_langfuse(data)
                     if "choices" in data and data["choices"]:
                         content = data["choices"][0]["message"]["content"]
                         try:

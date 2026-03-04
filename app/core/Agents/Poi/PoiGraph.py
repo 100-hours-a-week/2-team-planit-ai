@@ -33,6 +33,8 @@ from app.core.Agents.Poi.WebSearch.Extractor.JinaReader import JinaReader
 from app.core.Agents.Poi.WebSearch.Extractor.LangExtractor import LangExtractor
 from app.core.Agents.Poi.PoiMapper.GoogleMapsPoiMapper import GoogleMapsPoiMapper
 
+from langfuse import observe
+
 
 class PoiGraph:
     """
@@ -581,6 +583,7 @@ class PoiGraph:
                 logger.warning(f"PoiData not found for poi_id: {result.poi_id}, title: {result.title}")
         return {"merged_results": merged, "final_poi_data": final_poi_data}
     
+    @observe(name="poi-search")
     async def run(
         self,
         persona_summary: str,
