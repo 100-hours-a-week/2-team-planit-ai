@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     langextract_api_key: Optional[str]
 
     # MongoDB Settings
-    mongodb_uri: Optional[str] = "mongodb://127.0.0.1:27017"
+    mongodb_uri: str
     mongodb_db_name: str = "planit_chat"
 
     # Redis Settings
