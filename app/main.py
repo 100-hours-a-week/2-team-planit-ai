@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from app.api.routes import api_router
 from app.core.config import settings
 from app.core.redis_client import RedisClient
+from app.core.langfuse_setup import init_langfuse, flush_langfuse
 from app.worker.itinerary_worker import run_worker
 
 logger = logging.getLogger(__name__)
@@ -14,6 +15,9 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Langfuse 트레이싱 초기화
+    init_langfuse()
+
     # startup: Consumer Group 생성 보장
     await RedisClient.ensure_consumer_group(
         settings.redis_request_stream,
@@ -35,6 +39,9 @@ async def lifespan(app: FastAPI):
         worker_task.cancel()
     except Exception:
         logger.exception("Worker 종료 중 오류")
+
+    # Langfuse 버퍼 flush
+    flush_langfuse()
 
     await RedisClient.close()
 

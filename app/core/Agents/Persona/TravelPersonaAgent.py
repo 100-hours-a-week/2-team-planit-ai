@@ -7,6 +7,8 @@ from app.schemas.persona import ItineraryRequest
 from app.core.LLMClient.BaseLlmClient import BaseLLMClient
 import logging
 
+from langfuse import observe
+
 logger = logging.getLogger(__name__)
 
 class TravelPersonaState(TypedDict):
@@ -90,6 +92,7 @@ class TravelPersonaAgent:
             )
         }
 
+    @observe(name="persona-generation")
     async def run(self, itinerary_request: ItineraryRequest, qa_history: List[QAItem]) -> str:
         """
         워크플로우 실행 메서드

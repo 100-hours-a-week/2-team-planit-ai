@@ -17,6 +17,17 @@ from app.core.Agents.Poi.VectorDB.VectorSearchAgent import VectorSearchAgent
 
 from app.core.Prompt.PersonaAgentPrompt import PERSONA_SYSTEM_PROMPT, PERSONA_GENTERATE_PROMPT
 
+# 챗봇 관련 import
+from app.core.BackendClient import BackendClient
+from app.core.Agents.Chat.ScheduleChange.PlaceResolver import PlaceResolver
+from app.core.Agents.Chat.ScheduleChange.EventEditAgent import EventEditAgent
+from app.core.Agents.Chat.ScheduleChange.ConsistencyChecker import ConsistencyChecker
+from app.core.Agents.Chat.InfoAgent.PlaceSearchAgent import PlaceSearchAgent
+from app.core.Agents.Chat.InfoAgent.TavilySearchTool import TavilySearchTool
+from app.core.Agents.Chat.History.MongoHistoryStore import MongoHistoryStore
+from app.core.Agents.Chat.Orchestrator import Orchestrator
+from app.service.Chatbot.ChatbotService import ChatbotService
+
 # ── 모듈 레벨 싱글턴: 모든 요청이 동일한 객체를 공유 ──
 _embedding_pipeline = EmbeddingPipeline()
 _vector_search_agent = VectorSearchAgent(
@@ -52,6 +63,44 @@ _gen_itinerary_service = GenInitItineraryService(
     planner=_planner,
 )
 
+# ── 챗봇 관련 싱글턴 ──
+_backend_client = BackendClient()
+_place_resolver = PlaceResolver(
+    vector_search_agent=_vector_search_agent,
+)
+_history_store = MongoHistoryStore()
+_tavily_tool = TavilySearchTool()
+_event_edit_agent = EventEditAgent(llm_client=_llm_client)
+_consistency_checker = ConsistencyChecker(
+    total_budget=1_000_000,
+    travel_start_date="2026-01-01",
+    travel_end_date="2026-01-05",
+)
+_place_search = PlaceSearchAgent(
+    vector_search=_vector_search_agent,
+    tavily_tool=_tavily_tool,
+)
+_orchestrator = Orchestrator(
+    langchain_client=_langchain_client,
+    llm_client=_llm_client,
+    history_store=_history_store,
+    place_resolver=_place_resolver,
+    event_edit_agent=_event_edit_agent,
+    consistency_checker=_consistency_checker,
+    place_search=_place_search,
+    tavily_tool=_tavily_tool,
+    backend_client=_backend_client,
+)
+_chatbot_service = ChatbotService(
+    orchestrator=_orchestrator,
+    backend_client=_backend_client,
+)
+
 
 def get_gen_itinerary_service() -> GenInitItineraryService:
     return _gen_itinerary_service
+
+
+def get_chatbot_service() -> ChatbotService:
+    return _chatbot_service
+
