@@ -22,17 +22,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # =========================
-      # develop: 기존 tar.gz 아티팩트 빌드
-      # =========================
-      - name: Set up Python 3.11 (develop path)
-        if: startsWith(github.ref, 'refs/heads/develop') || github.base_ref == 'develop'
+      # Lock 검증 (develop/main 공통)
+      # - pyproject.toml ↔ uv.lock 불일치 시 실패
+      - name: Set up Python 3.11 (lock check)
+        if: |
+          startsWith(github.ref, 'refs/heads/develop') || github.base_ref == 'develop' ||
+          startsWith(github.ref, 'refs/heads/main') || github.base_ref == 'main'
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Set up uv (develop path)
-        if: startsWith(github.ref, 'refs/heads/develop') || github.base_ref == 'develop'
+      - name: Set up uv (lock check)
+        if: |
+          startsWith(github.ref, 'refs/heads/develop') || github.base_ref == 'develop' ||
+          startsWith(github.ref, 'refs/heads/main') || github.base_ref == 'main'
         uses: astral-sh/setup-uv@v3
         with:
           enable-cache: true
@@ -40,10 +43,15 @@ jobs:
             uv.lock
             pyproject.toml
 
-      - name: Sync dependencies (locked) (develop path)
-        if: startsWith(github.ref, 'refs/heads/develop') || github.base_ref == 'develop'
+      - name: Verify pyproject.toml matches uv.lock (frozen)
+        if: |
+          startsWith(github.ref, 'refs/heads/develop') || github.base_ref == 'develop' ||
+          startsWith(github.ref, 'refs/heads/main') || github.base_ref == 'main'
         run: uv sync --frozen
 
+      # =========================
+      # develop: 기존 tar.gz 아티팩트 빌드
+      # =========================
       - name: Build artifact tar.gz (develop path)
         if: startsWith(github.ref, 'refs/heads/develop') || github.base_ref == 'develop'
         run: |
@@ -78,13 +86,7 @@ jobs:
         if: startsWith(github.ref, 'refs/heads/main') || github.base_ref == 'main'
         uses: docker/setup-buildx-action@v3
 
-      - name: Set up QEMU (main push only, arm64)
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm64
-
-      # ✅ OIDC 제거하고, Access Key 방식으로 교체
+      # Access Key 방식
       - name: Configure AWS credentials (Access Key) (main push only)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: aws-actions/configure-aws-credentials@v4
@@ -110,12 +112,13 @@ jobs:
           echo "sha_tag=sha-${SHORT}" >> "$GITHUB_OUTPUT"
           echo "ts_tag=ts-${TS}" >> "$GITHUB_OUTPUT"
 
-      - name: Build Docker image (main PR/non-push, amd64 only)
+      # PR / non-push: ARM 단일 빌드 (push 없음)
+      - name: Build Docker image (main PR/non-push, arm64 only)
         if: (startsWith(github.ref, 'refs/heads/main') || github.base_ref == 'main') && !(github.event_name == 'push' && github.ref == 'refs/heads/main')
         uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: linux/amd64
+          platforms: linux/arm64
           push: false
           tags: local/planit-ai:${{ steps.meta.outputs.sha_tag }}
           cache-from: type=gha,scope=planit-ai-main
@@ -123,12 +126,13 @@ jobs:
           provenance: false
           sbom: false
 
-      - name: Build & Push Docker image (main push, multi-arch)
+      # main push: ARM 단일 빌드 + ECR push
+      - name: Build & Push Docker image (main push, arm64 only)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/arm64
           push: true
           tags: |
             ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ steps.meta.outputs.sha_tag }}
