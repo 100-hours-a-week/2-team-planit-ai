@@ -61,6 +61,11 @@ class ChatbotService:
                 user_jwt=request.userJWT,
             )
             backend_trip_data = raw_response.get("data", {})
+
+            logger.info(
+                f"백엔드 응답: {backend_trip_data}"
+            )
+
             current_itinerary = self._convert_to_itinerary_response(
                 backend_trip_data, request.tripId,
             )
@@ -80,10 +85,18 @@ class ChatbotService:
             backend_itinerary_data=backend_trip_data,
         )
 
+        logger.info(
+            f"Orchestrator 응답: {result}"
+        )
+
         # 3. 응답 반환 (PATCH는 이미 CRUD 도구에서 처리됨)
         response_text = result.get("response", "")
         if not response_text:
             response_text = "요청을 처리했습니다."
+
+        logger.info(
+            f"챗봇 응답: {response_text}"
+        )
 
         return ChatbotResponse(
             tripId=request.tripId,
