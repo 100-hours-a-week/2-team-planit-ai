@@ -109,12 +109,36 @@ APP_IMAGE="${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com/${REPO_NAME}:${IMAGE_TA
 # 필수 패키지
 if command -v apt-get >/dev/null 2>&1; then
   sudo apt-get update -y
-  sudo apt-get install -y jq curl awscli
+  sudo apt-get install -y jq curl
+
+  # AWS CLI가 없으면 snap으로 설치
+  if ! command -v aws >/dev/null 2>&1; then
+    echo "AWS CLI not found, installing via snap..."
+    
+    # snap이 없으면 설치
+    if ! command -v snap >/dev/null 2>&1; then
+      sudo apt-get install -y snapd
+    fi
+
+    sudo snap install aws-cli --classic
+  fi
+
 elif command -v yum >/dev/null 2>&1; then
-  sudo yum install -y jq curl awscli
+  sudo yum install -y jq curl
+
+  # Amazon Linux 등은 awscli 패키지 존재
+  if ! command -v aws >/dev/null 2>&1; then
+    sudo yum install -y awscli
+  fi
 fi
 
-# ASG 기동 시 Docker 선기동 보장
+# 최종 확인 (필수 의존성이므로 없으면 종료)
+if ! command -v aws >/dev/null 2>&1; then
+  echo "AWS CLI installation failed. Exiting."
+  exit 1
+fi
+
+# Docker 선기동 보장
 if command -v systemctl >/dev/null 2>&1; then
   systemctl enable docker
   systemctl start docker || true
