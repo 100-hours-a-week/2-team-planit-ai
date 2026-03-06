@@ -13,6 +13,10 @@ from langgraph.graph import StateGraph, END
 logger = logging.getLogger(__name__)
 
 from app.core.LLMClient.BaseLlmClient import BaseLLMClient
+from app.core.langfuse_setup import get_langfuse_handler
+
+from langfuse import observe
+
 from app.core.LLMClient.LangchainClient import LangchainClient
 from app.core.models.PoiAgentDataclass.poi import PoiData
 from app.core.models.ItineraryAgentDataclass.itinerary import (
@@ -316,6 +320,7 @@ class Planner:
     
     # ===== 메인 실행 함수 =====
     
+    @observe(name="itinerary-planner")
     async def run(
         self,
         pois: List[PoiData],
@@ -363,7 +368,19 @@ class Planner:
         }
 
         try:
-            result = await self.graph.ainvoke(initial_state)
+            # Langfuse CallbackHandler 주입
+            callbacks = []
+            handler = get_langfuse_handler(
+                session_id=f"itinerary-{travel_destination}",
+                tags=["itinerary-plan"],
+            )
+            if handler:
+                callbacks.append(handler)
+
+            result = await self.graph.ainvoke(
+                initial_state,
+                config={"callbacks": callbacks} if callbacks else None,
+            )
         except Exception as e:
             logger.error("여행 일정 생성 중 오류 발생: %s", e, exc_info=True)
             raise

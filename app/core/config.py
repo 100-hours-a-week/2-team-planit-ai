@@ -35,11 +35,11 @@ class Settings(BaseSettings):
     langextract_api_key: Optional[str]
 
     # MongoDB Settings
-    mongodb_uri: Optional[str] = "mongodb://127.0.0.1:27017"
+    mongodb_uri: str
     mongodb_db_name: str = "planit_chat"
 
     # Redis Settings
-    redis_url: str = "redis://:localpass@localhost:6379/0"
+    redis_url: str
     # redis_request_stream: str = "itinerary:request"
     redis_request_stream: str = "stream:ai-jobs"
     # redis_result_stream: str = "itinerary:result"
@@ -51,6 +51,15 @@ class Settings(BaseSettings):
 
     # Vector DB Settings
     # vector_db_path: str
+
+    # Backend API Settings
+    backend_base_url: str = "http://localhost:8080"
+
+    # Langfuse Settings
+    langfuse_secret_key: Optional[str] = None
+    langfuse_public_key: Optional[str] = None
+    langfuse_host: str = "https://cloud.langfuse.com"
+    langfuse_enabled: bool = True  # False로 설정 시 트레이싱 비활성화
 
     @model_validator(mode='after')
     def validate_llm_settings(self) -> 'Settings':

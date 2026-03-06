@@ -6,6 +6,9 @@ from app.core.Agents.Persona.TravelPersonaAgent import TravelPersonaAgent
 from app.schemas.persona import ItineraryRequest
 from app.schemas.Itinerary import ItineraryResponse, gen_itinerary
 
+from langfuse import observe
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -20,6 +23,7 @@ class GenInitItineraryService:
         self.poi_graph = poi_graph
         self.planner = planner
 
+    @observe(name="itinerary-pipeline")
     async def gen_init_itinerary(self, request: ItineraryRequest) -> ItineraryResponse:
         """초기 일정 생성 파이프라인: 페르소나 → POI → 일정"""
 

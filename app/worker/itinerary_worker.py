@@ -32,6 +32,7 @@ from app.core.Agents.Poi.VectorDB.VectorSearchAgent import VectorSearchAgent
 from app.core.Prompt.PersonaAgentPrompt import PERSONA_SYSTEM_PROMPT, PERSONA_GENTERATE_PROMPT
 from app.service.Ininerary.gen_init_Ininerary import GenInitItineraryService
 from app.schemas.persona import ItineraryRequest
+from app.core.langfuse_setup import init_langfuse
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +118,9 @@ async def _process_message(r, service, msg_id, fields):
 async def run_worker(shutdown_event: asyncio.Event | None = None):
     """메인 워커 루프. shutdown_event가 주어지면 그것으로 종료를 판단."""
     global _shutdown
+
+    # Langfuse 트레이싱 초기화 (독립 프로세스 실행 시)
+    init_langfuse()
 
     r = await RedisClient.get_instance()
     await RedisClient.ensure_consumer_group(
