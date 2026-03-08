@@ -47,3 +47,11 @@ zzzzz
 testnotebook/
 
 *.resolved
+
+# Docker MongoDB secrets
+docker/mongodb/keyfile
+docker/mongodb/passwordFile
+
+docs/
+docker/
+채용공고_분석.md

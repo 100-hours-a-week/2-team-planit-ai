@@ -1,0 +1,18 @@
+# Redis Docker Compose
+# 실행: docker compose -f docker-compose.redis.yml up -d
+# 중지: docker compose -f docker-compose.redis.yml down
+# 접속 확인: docker exec -it planit-redis redis-cli -a localpass ping
+
+services:
+  redis:
+    image: redis:7.4
+    container_name: planit-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes --appendfsync everysec --requirepass localpass
+    volumes:
+      - planit-redis-data:/data
+
+volumes:
+  planit-redis-data:
