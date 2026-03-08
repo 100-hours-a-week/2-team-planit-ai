@@ -62,7 +62,7 @@ class WebSearchAgent(BaseWebSearchAgent):
             return []
 
         try:
-            response = self.client.search(
+            response = await self.client.search(
                 query=query,
                 max_results=self.num_results,
                 include_answer=False,

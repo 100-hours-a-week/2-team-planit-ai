@@ -293,7 +293,7 @@ class LangExtractor(BaseExtractor):
         self.model_id = model_id    
         self.model_url = model_url
 
-    def extract(self, raw_content: str, url: str = None) -> List[PoiSearchResult]:
+    async def extract(self, raw_content: str, url: str = None) -> List[PoiSearchResult]:
         """
         마크다운 raw_content에서 POI 정보를 추출
 
@@ -316,7 +316,7 @@ class LangExtractor(BaseExtractor):
                 # "max_workers": 10
             }
             
-            result = lx.extract(**extract_kwargs)
+            result = await lx.extract_async(**extract_kwargs)
             
             # print(result)
 
