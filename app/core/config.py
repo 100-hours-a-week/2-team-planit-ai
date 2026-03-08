@@ -50,7 +50,9 @@ class Settings(BaseSettings):
     redis_max_stream_len: int = 10000
 
     # Vector DB Settings
-    # vector_db_path: str
+    vector_db_backend: str = "mongodb"                # "chromadb" or "mongodb"
+    mongodb_vector_collection: str = "poi_embeddings"  # MongoDB vector collection name
+    mongodb_vector_index: str = "poi_vector_index"     # Vector index name
 
     # Backend API Settings
     backend_base_url: str = "http://localhost:8080"

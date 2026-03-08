@@ -13,7 +13,10 @@ from app.core.Agents.ItineraryPlan.Planner import Planner
 from app.service.Ininerary.gen_init_Ininerary import GenInitItineraryService
 from app.core.Agents.Poi.VectorDB.EmbeddingPipeline.EmbeddingPipeline import EmbeddingPipeline
 from app.core.Agents.Poi.VectorDB.EmbeddingPipeline.PersonaEmbeddingPipeline import PersonaEmbeddingPipeline
-from app.core.Agents.Poi.VectorDB.VectorSearchAgent import VectorSearchAgent
+if settings.vector_db_backend == "mongodb":
+    from app.core.Agents.Poi.VectorDB.MongoVectorSearchAgent import MongoVectorSearchAgent as _VectorSearchAgentClass
+else:
+    from app.core.Agents.Poi.VectorDB.VectorSearchAgent import VectorSearchAgent as _VectorSearchAgentClass
 
 from app.core.Prompt.PersonaAgentPrompt import PERSONA_SYSTEM_PROMPT, PERSONA_GENTERATE_PROMPT
 
@@ -30,9 +33,18 @@ from app.service.Chatbot.ChatbotService import ChatbotService
 
 # ── 모듈 레벨 싱글턴: 모든 요청이 동일한 객체를 공유 ──
 _embedding_pipeline = EmbeddingPipeline()
-_vector_search_agent = VectorSearchAgent(
-    embedding_pipeline=_embedding_pipeline,
-)
+if settings.vector_db_backend == "mongodb":
+    _vector_search_agent = _VectorSearchAgentClass(
+        embedding_pipeline=_embedding_pipeline,
+        mongodb_uri=settings.mongodb_uri,
+        db_name=settings.mongodb_db_name,
+        collection_name=settings.mongodb_vector_collection,
+        index_name=settings.mongodb_vector_index,
+    )
+else:
+    _vector_search_agent = _VectorSearchAgentClass(
+        embedding_pipeline=_embedding_pipeline,
+    )
 _llm_client = VllmClient()
 _langchain_client = LangchainClient(
     base_url=settings.vllm_base_url,
