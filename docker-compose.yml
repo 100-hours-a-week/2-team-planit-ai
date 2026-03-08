@@ -1,45 +1,35 @@
 services:
-  mongod:
-    image: mongodb/mongodb-community-server:latest
-    container_name: mongod-community
-    command: >-
-      mongod --config /etc/mongod.conf --replSetMember=mongod.search-community:27017
+  planit:
+    container_name: planit
+    build:
+      context: .
+      dockerfile: Dockerfile
     ports:
-      - 27017:27017
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      - "${PORT:-8000}:${PORT:-8000}"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      HOST: "${HOST:-0.0.0.0}"
+      PORT: "${PORT:-8000}"
+      LLM_CLIENT_TIMEOUT: "${LLM_CLIENT_TIMEOUT:-30}"
+      LLM_CLIENT_MAX_RETRIES: "${LLM_CLIENT_MAX_RETRIES:-3}"
+      VLLM_CLIENT_MAX_TOKENS: "${VLLM_CLIENT_MAX_TOKENS:-2048}"
+      LLM_CLIENT_TEMPERATURE: "${LLM_CLIENT_TEMPERATURE:-0.7}"
+      LLM_CLIENT_TOP_P: "${LLM_CLIENT_TOP_P:-0.9}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      OPENAI_BASE_URL: "${OPENAI_BASE_URL:-https://api.openai.com/v1}"
+      OPENAI_MODEL: "${OPENAI_MODEL:-}"
+      VLLM_BASE_URL: "${VLLM_BASE_URL:-}"
+      VLLM_MODEL: "${VLLM_MODEL:-}"
+      GOOGLE_MAPS_API_KEY: "${GOOGLE_MAPS_API_KEY:-}"
+      TAVILY_API_KEY: "${TAVILY_API_KEY:?TAVILY_API_KEY is required}"
+      LANGEXTRACT_API_KEY: "${LANGEXTRACT_API_KEY:?LANGEXTRACT_API_KEY is required}"
     volumes:
-      - mongod_data:/data/db
-      - ./docker/mongodbv/mongod.conf:/etc/mongod.conf:ro
-      - ./docker/mongodbv/init-mongo.sh:/docker-entrypoint-initdb.d/init-mongo.sh:ro
-    networks:
-      - search-community
-
-  mongot:
-    image: mongodb/mongodb-community-search:latest
-    entrypoint:
-      - /mongot-community/mongot
-      - --config=/mongot-community/config.default.yml
-      - --internalListAllIndexesForTesting=true
-    container_name: mongot-community-pupr
-    networks:
-      - search-community
-    volumes:
-      - mongot_data:/data/mongot
-      - ./docker/mongodbv/mongot.conf:/mongot-community/config.default.yml
-      - ./docker/mongodbv/pwfile:/mongot-community/pwfile:ro
-    depends_on:
-      - mongod
-    ports:
-      - 27028:27028 # Query server port from config
-      - 9946:9946 # Metrics port from config
-
-volumes:
-  mongod_data:
-  mongot_data:
-
-
-networks:
-  search-community:
-    name: search-community
-    external: true # Use an external network if it exists. Comment this line if you want to create a new network.
+      - ./logs/ai:/var/log/planit/ai
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "10"
+    restart: unless-stopped
