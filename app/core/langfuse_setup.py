@@ -51,7 +51,7 @@ def get_langfuse_handler(**kwargs):
 
     Args:
         **kwargs: CallbackHandler에 전달할 추가 인자
-            (session_id, user_id, tags 등)
+            (session_id, user_id 등, 단 tags는 지원하지 않으므로 invoke config 옵션 사용 권장)
 
     Returns:
         CallbackHandler 또는 None

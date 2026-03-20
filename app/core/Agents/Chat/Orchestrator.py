@@ -170,18 +170,20 @@ class Orchestrator:
 
         # 6. Langfuse 콜백
         callbacks = []
-        handler = get_langfuse_handler(tags=["orchestrator-react"])
+        handler = get_langfuse_handler()
         if handler:
             callbacks.append(handler)
 
         config = {
             "configurable": {"thread_id": session_id},
+            "tags": ["orchestrator-react"]
         }
         if callbacks:
             config["callbacks"] = callbacks
 
         # 7. ReAct 에이전트 실행
         try:
+            logger.info(f"ReAct 에이전트 실행: {messages}")
             result = await agent.ainvoke(
                 {"messages": messages},
                 config=config,
@@ -223,12 +225,13 @@ class Orchestrator:
         from langgraph.types import Command
 
         callbacks = []
-        handler = get_langfuse_handler(tags=["orchestrator-resume"])
+        handler = get_langfuse_handler()
         if handler:
             callbacks.append(handler)
 
         config = {
             "configurable": {"thread_id": session_id},
+            "tags": ["orchestrator-resume"]
         }
         if callbacks:
             config["callbacks"] = callbacks
