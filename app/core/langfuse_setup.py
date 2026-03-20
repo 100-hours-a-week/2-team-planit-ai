@@ -63,13 +63,51 @@ def get_langfuse_handler(**kwargs):
         from langfuse.langchain import CallbackHandler
         from langfuse import get_client
 
+        class CustomLangfuseHandler(CallbackHandler):
+            def __init__(self, **kw):
+                self._custom_tags = kw.pop("tags", None)
+                self._custom_session_id = kw.pop("session_id", None)
+                self._custom_user_id = kw.pop("user_id", None)
+                
+                trace_ctx = kw.pop("trace_context", None)
+                if "trace_id" in kw:
+                    tid = kw.pop("trace_id")
+                    if not trace_ctx:
+                        trace_ctx = {"trace_id": tid}
+
+                valid_kwargs = {}
+                if trace_ctx:
+                    valid_kwargs["trace_context"] = trace_ctx
+                if "public_key" in kw:
+                    valid_kwargs["public_key"] = kw["public_key"]
+                if "update_trace" in kw:
+                    valid_kwargs["update_trace"] = kw["update_trace"]
+                
+                super().__init__(**valid_kwargs)
+
+            def on_chain_start(self, serialized, inputs, **kw):
+                metadata = kw.get("metadata") or {}
+                # Create a copy to prevent modifying the original dict shared elsewhere
+                metadata = metadata.copy()
+                
+                if self._custom_tags:
+                    existing = metadata.get("langfuse_tags", [])
+                    metadata["langfuse_tags"] = list(set(existing + self._custom_tags))
+                if self._custom_session_id:
+                    metadata.setdefault("langfuse_session_id", self._custom_session_id)
+                if self._custom_user_id:
+                    metadata.setdefault("langfuse_user_id", self._custom_user_id)
+                
+                kw["metadata"] = metadata
+                return super().on_chain_start(serialized, inputs, **kw)
+
         # 현재 @observe 컨텍스트의 trace_id를 가져와 동일 트레이스에 연결
         client = get_client()
         trace_id = client.get_current_trace_id()
         if trace_id:
             kwargs.setdefault("trace_id", trace_id)
 
-        return CallbackHandler(**kwargs)
+        return CustomLangfuseHandler(**kwargs)
     except Exception as e:
         logger.warning("Langfuse CallbackHandler 생성 실패: %s", e)
         return None
