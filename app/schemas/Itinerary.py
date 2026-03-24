@@ -19,6 +19,7 @@ class ActivityResponse(BaseModel):
     cost: Optional[int] = None
     memo: Optional[str] = None
     googleMapUrl: Optional[str] = None
+    placeId: Optional[str] = None
 
 
 class DayItineraryResponse(BaseModel):
@@ -70,6 +71,7 @@ def gen_itinerary(trip_id: int, itineraries: List[Itinerary]) -> ItineraryRespon
                 startTime=start_time,
                 duration=duration,
                 googleMapUrl=poi.google_maps_uri,
+                placeId=poi.place_id,
             ))
             event_order += 1
 
